@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="fr-CA">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Québec en mouvement : simulateur tramway, bus et Cybercab</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600&family=Barlow+Semi+Condensed:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/maplibre-gl@5.24.1/dist/maplibre-gl.css" integrity="sha384-uTttxo/aOKbdE5RlD/SPzSDoDmNvGlUYPjONi2MN/b7c9HPSvW07OIuyP7uL6jxK" crossorigin="anonymous">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="map" aria-label="Carte de Québec avec les véhicules simulés"></div>
+
+<aside class="panel panel-left" aria-label="Scénario">
+  <header class="brand">
+    <h1>Québec en mouvement</h1>
+    <p>Une journée de semaine simulée sur le réseau réel, d'après l'enquête Origine-Destination 2023.</p>
+  </header>
+
+  <section>
+    <h2>Sur le tracé du tramway</h2>
+    <div class="choice" role="radiogroup" aria-label="Mode sur le tracé" id="line-choice">
+      <button role="radio" data-line="none" aria-checked="false"><span class="swatch sw-none"></span>Rien (aujourd'hui)</button>
+      <button role="radio" data-line="tram" aria-checked="true"><span class="swatch sw-tram"></span>Tramway TramCité</button>
+      <button role="radio" data-line="bus" aria-checked="false"><span class="swatch sw-bus"></span>Bus en voies réservées</button>
+    </div>
+    <p class="hint" id="line-hint"></p>
+  </section>
+
+  <section>
+    <h2>Flotte de Cybercab</h2>
+    <div class="choice" role="radiogroup" aria-label="Zone desservie par les Cybercab" id="cab-choice">
+      <button role="radio" data-cab="off" aria-checked="true"><span class="swatch sw-none"></span>Aucune</button>
+      <button role="radio" data-cab="corridor" aria-checked="false"><span class="swatch sw-cab"></span>Le long du tracé</button>
+      <button role="radio" data-cab="wide" aria-checked="false"><span class="swatch sw-cab"></span>Réseau élargi (toute la ville)</button>
+    </div>
+    <div id="cab-options" hidden>
+      <label class="slider"><span>Véhicules en service <output id="fleet-out"></output></span>
+        <input type="range" id="fleet" min="200" max="20000" step="100" value="3000"></label>
+      <label class="slider"><span>Tarif au kilomètre <output id="fare-out"></output></span>
+        <input type="range" id="fare" min="0.3" max="2" step="0.1" value="1.2"></label>
+      <p class="hint">Scénario prospectif : aucun robotaxi n'est autorisé au Québec hors projet pilote.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>Conditions</h2>
+    <label class="check"><input type="checkbox" id="winter"> Journée d'hiver (chaussée, autonomie des batteries)</label>
+    <div class="starts" aria-label="Heure de départ">
+      <span>Reprendre à</span>
+      <button data-start="5">5 h</button><button data-start="7">7 h</button><button data-start="12">midi</button><button data-start="16">16 h</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>Afficher</h2>
+    <label class="check"><input type="checkbox" id="ly-cars" checked> Automobiles</label>
+    <label class="check"><input type="checkbox" id="ly-roads" checked> Congestion des rues</label>
+    <label class="check"><input type="checkbox" id="ly-zone" checked> Zone desservie par les Cybercab</label>
+    <ul class="legend">
+      <li><i class="dot car"></i>1 point = 4 automobiles</li>
+      <li><i class="dot cab"></i>Cybercab en course</li>
+      <li><i class="dot cab-empty"></i>Cybercab à vide ou libre</li>
+      <li><i class="ramp"></i>Rue fluide, chargée, saturée</li>
+    </ul>
+  </section>
+
+  <footer>
+    <button class="link" id="open-assumptions">Hypothèses et sources</button>
+    <button class="link" id="open-compare">Comparer les journées simulées</button>
+  </footer>
+</aside>
+
+<aside class="panel panel-right" aria-label="Indicateurs" aria-live="off">
+  <section>
+    <h2 id="split-title">Déplacements depuis 5 h</h2>
+    <div class="split" id="split"></div>
+    <ul class="split-legend" id="split-legend"></ul>
+  </section>
+  <section>
+    <h2>Circulation automobile</h2>
+    <dl class="kpis">
+      <div><dt>Vitesse moyenne</dt><dd id="k-speed">–</dd></div>
+      <div><dt>Temps perdu en congestion</dt><dd id="k-cong">–</dd></div>
+      <div><dt>Automobiles en route</dt><dd id="k-cars">–</dd></div>
+      <div><dt>Trajets en auto évités</dt><dd id="k-removed">–</dd></div>
+    </dl>
+  </section>
+  <section id="sec-line" hidden>
+    <h2 id="line-title">Tramway</h2>
+    <div class="gauge"><div class="gauge-bar"><span id="g-load"></span></div>
+      <p><strong id="k-peak">–</strong> passagers sur le tronçon le plus chargé depuis une heure, pour <span id="k-cap">–</span> places offertes</p></div>
+    <dl class="kpis">
+      <div><dt>Montées depuis le départ</dt><dd id="k-board">–</dd></div>
+      <div><dt>À bord en ce moment</dt><dd id="k-onboard">–</dd></div>
+      <div><dt>Attente moyenne</dt><dd id="k-lwait">–</dd></div>
+      <div><dt>Vitesse commerciale</dt><dd id="k-lspeed">–</dd></div>
+      <div><dt>Véhicules en service</dt><dd id="k-lveh">–</dd></div>
+      <div><dt>Laissés à quai</dt><dd id="k-denied">–</dd></div>
+    </dl>
+  </section>
+  <section id="sec-cab" hidden>
+    <h2>Cybercab</h2>
+    <div class="split thin" id="cab-split"></div>
+    <ul class="split-legend" id="cab-legend"></ul>
+    <dl class="kpis">
+      <div><dt>Passagers transportés</dt><dd id="k-rides">–</dd></div>
+      <div><dt>Attente moyenne</dt><dd id="k-cwait">–</dd></div>
+      <div><dt>Kilomètres à vide</dt><dd id="k-empty">–</dd></div>
+      <div><dt>Demandes sans véhicule</dt><dd id="k-unserved">–</dd></div>
+    </dl>
+  </section>
+  <section>
+    <h2>Climat</h2>
+    <p class="co2"><strong id="k-co2">–</strong> <span id="k-co2-label">tonnes de CO₂ évitées depuis le départ</span></p>
+  </section>
+</aside>
+
+<div class="dock" aria-label="Horloge et vitesse">
+  <div class="clock"><span id="clock">05 h 00</span><small id="day-label">Jour 1</small></div>
+  <button id="play" class="play" aria-label="Mettre en pause">❚❚</button>
+  <div class="speeds" role="radiogroup" aria-label="Vitesse de la simulation" id="speeds">
+    <button role="radio" data-speed="1" aria-checked="false">Temps réel</button>
+    <button role="radio" data-speed="30" aria-checked="false">×30</button>
+    <button role="radio" data-speed="120" aria-checked="true">×120</button>
+    <button role="radio" data-speed="600" aria-checked="false">×600</button>
+    <button role="radio" data-speed="0" aria-checked="false">Maximum</button>
+  </div>
+  <figure class="timeline">
+    <canvas id="chart" width="900" height="96" aria-label="Congestion et charge de la ligne au fil de la journée"></canvas>
+    <figcaption><span class="key k-cong"></span>Temps perdu en auto <span class="key k-line" id="key-line-swatch"></span><span id="key-line">Charge de la ligne</span></figcaption>
+  </figure>
+</div>
+
+<div class="status" id="status">Chargement du réseau routier de Québec…</div>
+
+<dialog id="dlg-assumptions">
+  <form method="dialog"><button class="close" aria-label="Fermer">×</button></form>
+  <h2>Hypothèses et sources</h2>
+  <p class="lead">Ce simulateur est un modèle calé sur des données publiques. Ce n'est pas une étude d'achalandage officielle : il sert à comparer des ordres de grandeur.</p>
+  <div id="assumptions"></div>
+</dialog>
+
+<dialog id="dlg-compare">
+  <form method="dialog"><button class="close" aria-label="Fermer">×</button></form>
+  <h2>Journées simulées</h2>
+  <p class="lead">Chaque journée complète, simulée de 5 h à 5 h sans changement de scénario, s'ajoute ici. Changez de scénario et laissez tourner à la vitesse maximum pour comparer.</p>
+  <div id="compare"></div>
+</dialog>
+
+<script src="https://cdn.jsdelivr.net/npm/maplibre-gl@5.24.1/dist/maplibre-gl.js" integrity="sha384-nXMl9YiLoSG5KBPTFgvxVuIqQQcqIvo0bFrvoEaGJC6r7IibIzF1S36Zbf/sKBtL" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/deck.gl@9.4.1/dist.min.js" integrity="sha384-MgmfghaFhzRlOya+lTLbCWa1NESjFsHp55UTFgT7doYqkH8cvOGK/V8+5SyeryGb" crossorigin="anonymous"></script>
+<script src="data/network.js"></script>
+<script src="js/engine/core.js"></script>
+<script src="js/engine/network.js"></script>
+<script src="js/engine/line.js"></script>
+<script src="js/engine/cabs.js"></script>
+<script src="js/engine/sim.js"></script>
+<script src="js/assumptions.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

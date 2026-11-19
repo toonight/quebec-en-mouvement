@@ -1,0 +1,124 @@
+/* Noyau : espace de noms, paramètres du modèle, utilitaires. Fonctionne dans le navigateur et sous Node. */
+(function () {
+  const TQ = typeof window !== 'undefined' ? (window.TQ = window.TQ || {}) : (globalThis.TQ = globalThis.TQ || {});
+
+  /** Paramètres du modèle. Les valeurs sourcées sont décrites dans le panneau « Hypothèses » de l'interface. */
+  TQ.PARAMS = {
+    scale: 5, // 1 agent simulé = 5 personnes
+    dayStart: 5 * 3600, // la journée simulée va de 5 h à 5 h
+    carOccupancy: 1.21, // EOD 2023
+    truckFactor: 1.12, // camions et trafic de transit absents de l'EOD
+    bprAlpha: 0.7,
+    bprBeta: 4,
+    bprMaxRatio: 1.9,
+    flowTau: 600, // constante de temps (s) du lissage des débits
+    treeRefresh: 1200, // recalcul des itinéraires (s simulées)
+    // Profil horaire (part des déplacements quotidiens par heure, 0 h à 23 h). Calé sur les 4 périodes de l'EOD 2023
+    // (pointe AM 23,6 %, jour 28,0 %, pointe PM 31,9 %, soir et nuit 16,5 %) ; heures de pointe 7 h et 16 h.
+    hourly: [0.3, 0.15, 0.1, 0.1, 0.25, 0.6, 5.0, 11.7, 6.9, 4.3, 4.2, 4.6, 5.0, 4.7, 5.2, 9.7, 13.2, 9.0, 5.0, 3.6, 2.6, 1.9, 1.2, 0.7],
+    gravityLambda: 3900, // m — dissuasion par la distance dans le tirage des destinations (portée moyenne EOD : 6,1 km)
+    gravityTries: 6,
+    homeOrigin: { A: 0.9, H: 0.5, P: 0.15, N: 0.3 }, // probabilité que l'origine soit le domicile
+    // Choix modal (minutes généralisées)
+    theta: 0.12,
+    vot: 22, // valeur du temps, $/h
+    votTransit: 14, // valeur du temps des usagers du transport collectif face au tarif d'un robotaxi
+    carCostKm: 0.22,
+    transitFare: 2.6, // $ par déplacement (moyenne titres et laissez-passer)
+    carCaptivity: -1, // constante de captivité automobile vis-à-vis de la ligne (min) — calée sur la prévision d'achalandage
+    walkSpeed: 80, // m/min
+    walkWeight: 1.8,
+    waitWeight: 1.5,
+    walkMax: 1100,
+    feederSpeed: 333, // m/min (20 km/h)
+    rtcSpeedKmh: 17, // vitesse porte-à-porte des parcours actuels
+    // Conditions hivernales
+    winterCap: 0.9,
+    winterSpeed: 0.92,
+    winterEnergy: 1.35,
+    // Émissions
+    carCO2: 0.21, // kg CO2 / véh-km (parc léger à essence)
+    busCO2: 0.9, // kg CO2 / bus-km (articulé hybride)
+    gridCO2: 0.002, // kg CO2 / kWh (Hydro-Québec)
+    line: {
+      tram: {
+        label: 'Tramway', capacity: 240, length: 40, width: 2.65,
+        headway: { peak: 4, shoulder: 5, day: 8, evening: 12 },
+        cruise: 42, cruiseTunnel: 60, stopLoss: 20, junctionDelay: 5, junctionEvery: 450,
+        dwellBase: 18, dwellPerPax: 0.035, dwellMax: 60, bonus: 4, ivtWeight: 0.9, kwhKm: 3.2, co2Km: 0,
+      },
+      bus: {
+        label: 'Bus articulé en voies réservées', capacity: 105, length: 18.9, width: 2.6,
+        headway: { peak: 2.5, shoulder: 3, day: 6, evening: 10 },
+        cruise: 38, cruiseTunnel: 26, stopLoss: 22, junctionDelay: 14, junctionEvery: 400,
+        dwellBase: 12, dwellPerPax: 0.09, dwellMax: 110, bonus: 1, ivtWeight: 1.0, kwhKm: 0, co2Km: 0.9,
+      },
+    },
+    cab: {
+      seats: 2, occupancy: 1.4, batteryKwh: 47.6, kwhKm: 0.11, maxEtaMin: 12, chargeMin: 25, reserve: 0.15,
+      fareBase: 3.5, farePerKm: 1.2, captivity: 9, corridorRadius: 1200, rebalanceIdleMin: 20,
+    },
+  };
+
+  /** Générateur pseudo-aléatoire déterministe (mulberry32). */
+  TQ.rng = function (seed) {
+    let a = seed >>> 0;
+    return function () {
+      a = (a + 0x6d2b79f5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  };
+
+  TQ.poisson = function (lambda, rnd) {
+    if (lambda <= 0) return 0;
+    if (lambda > 30) {
+      const u = Math.sqrt(-2 * Math.log(1 - rnd())) * Math.cos(2 * Math.PI * rnd());
+      return Math.max(0, Math.round(lambda + Math.sqrt(lambda) * u));
+    }
+    const L = Math.exp(-lambda);
+    let k = 0, p = 1;
+    do { k++; p *= rnd(); } while (p > L);
+    return k - 1;
+  };
+
+  const LAT0 = 46.8, LON0 = -71.28;
+  const KX = 111320 * Math.cos((LAT0 * Math.PI) / 180), KY = 110574;
+  TQ.geo = {
+    KX, KY,
+    x: (lon) => (lon - LON0) * KX,
+    y: (lat) => (lat - LAT0) * KY,
+    dist: (lon1, lat1, lon2, lat2) => Math.hypot((lon1 - lon2) * KX, (lat1 - lat2) * KY),
+  };
+
+  TQ.sigmoid = (x) => 1 / (1 + Math.exp(-x));
+
+  /** Recherche dans une distribution cumulée. */
+  TQ.pick = function (cum, r) {
+    let lo = 0, hi = cum.length - 1;
+    const target = r * cum[hi];
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (cum[mid] > target) hi = mid; else lo = mid + 1;
+    }
+    return lo;
+  };
+
+  TQ.formatClock = function (t) {
+    const s = ((t % 86400) + 86400) % 86400;
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+    return (h < 10 ? '0' : '') + h + ' h ' + (m < 10 ? '0' : '') + m;
+  };
+
+  /** Type de période de service pour une heure donnée. */
+  TQ.servicePeriod = function (t) {
+    const h = ((t % 86400) / 3600);
+    if (h >= 1 && h < 5) return 'closed';
+    if ((h >= 6.5 && h < 9) || (h >= 15 && h < 18)) return 'peak';
+    if ((h >= 6 && h < 6.5) || (h >= 9 && h < 9.5) || (h >= 14.5 && h < 15) || (h >= 18 && h < 18.5)) return 'shoulder';
+    if (h >= 9.5 && h < 14.5) return 'day';
+    if (h >= 18.5 && h < 20) return 'day';
+    return 'evening';
+  };
+})();
