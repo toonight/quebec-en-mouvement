@@ -34,6 +34,13 @@
       'Les trajets à vide (approche, repositionnement) s\'ajoutent à la circulation. Recharge de 25 minutes quand la batterie atteint sa réserve.',
       '« Le long du tracé » dessert les lieux à moins de 1,2 km de la ligne ; « réseau élargi » dessert les six arrondissements de la Ville de Québec.',
     ] },
+    { title: 'Rentabilité', items: [
+      `Calcul financier du point de vue de l'exploitant : recettes des passagers, moins les coûts d'exploitation, moins l'investissement étalé sur sa durée de vie (taux réel de 4 %). Les subventions et les bénéfices pour la société (temps gagné, CO₂, accidents) ne sont pas comptés.`,
+      `Une journée de semaine simulée compte pour 1/300 de l'année. Recette par déplacement en transport collectif : 2,53 $, soit 82,3 M$ pour 32,5 millions de déplacements au ${a('https://cdn.rtcquebec.ca/sites/default/files/2025-12/Budget_2026.pdf', 'budget 2026 du RTC')}. Les montées de la ligne venant des autobus actuels sont comptées comme recettes de la ligne, même si elles ne sont pas nouvelles pour le RTC.`,
+      `Tramway : investissement de 7,6 G$ (${a('https://www.lesaffaires.com/secteurs/aeronautique-et-transport/le-cout-du-tramway-de-quebec-est-evalue-a-76g-mise-en-service-en-2033/', 'montant annoncé par le gouvernement')}) étalé sur 40 ans. Exploitation : 16 $ par kilomètre de rame et 12 M$ par an pour l'infrastructure (hypothèses, faute de chiffre officiel pour TramCité).`,
+      `Bus en voies réservées : investissement de 1,4 G$, soit 19 km au coût moyen du ${a('https://www.cbc.ca/1.7232400', 'plan CITÉ de CDPQ Infra')} (4,5 G$ pour 60 km de voies réservées), étalé sur 30 ans. Exploitation : 10,50 $ par kilomètre, d'après le budget 2026 du RTC (290 M$ pour 28,8 millions de kilomètres), et 3 M$ par an pour l'infrastructure (hypothèse).`,
+      `Cybercab : 42 000 $ par véhicule (${a('https://insideevs.com/news/736936/tesla-robotaxi-cybercab-price/', 'moins de 30 000 $ US selon Tesla')}) et 8 000 $ de recharge et de dépôt, étalés sur 5 ans. Exploitation : 0,25 $ par kilomètre (entretien, nettoyage, supervision, assurance), électricité à 0,12 $ le kilowattheure et 4 000 $ par véhicule par an. Ces coûts suivent les cibles de Tesla, qui ne sont pas encore démontrées en exploitation.`,
+    ] },
     { title: 'Limites du modèle', items: [
       'Le réseau d\'autobus actuel du RTC n\'est pas animé : ses usagers apparaissent seulement dans la répartition des déplacements.',
       'Pas de feux de circulation ni de files d\'attente physiques : la congestion est estimée par tronçon, et elle est sous-estimée en dehors des heures de pointe.',

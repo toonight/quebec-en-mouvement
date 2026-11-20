@@ -28,6 +28,7 @@ produit `web/data/network.js` (et `data/network.json` pour les tests).
 ```powershell
 node --test tests/
 node tests/run_day.js tram off 0 24
+node tests/econ_report.js   # rentabilité annuelle de huit scénarios (environ 3 minutes)
 ```
 
 `run_day.js <none|tram|bus> <off|corridor|wide> <flotte> <heures>` exécute une journée hors

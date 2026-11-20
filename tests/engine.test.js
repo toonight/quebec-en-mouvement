@@ -79,3 +79,28 @@ test('la simulation est déterministe à graine égale', () => {
   const b = run({ line: 'tram', cab: 'off' }, 1, 7 * 3600).summary();
   assert.deepStrictEqual(a.modes, b.modes);
 });
+
+test('rentabilité : recettes, exploitation et investissement se composent correctement', () => {
+  const E = TQ.ECON;
+  assert.ok(Math.abs(TQ.annuity(0.04, 40) - 0.050523) < 1e-5);
+  const s = { elapsedH: 24, line: { kind: 'tram', boardings: 70000, vehKm: 6000 }, cab: { fleet: 1000, rides: 14000, revenue: 90000, vkmEmpty: 20000, vkmLoaded: 80000, kwh: 11000 } };
+  const e = TQ.economics(s);
+  const [l, c] = e.parts;
+  assert.strictEqual(l.revenue, 70000 * E.transitFare);
+  assert.ok(Math.abs(l.opex - (6000 * 16 + 12e6 / 300)) < 1e-6);
+  assert.ok(Math.abs(l.capital * 300 - 7.6e9 * TQ.annuity(0.04, 40)) < 1);
+  assert.ok(Math.abs(c.opex - (100000 * 0.25 + 11000 * 0.12 + (1000 * 4000) / 300)) < 1e-6);
+  assert.strictEqual(c.capex, 1000 * 50000);
+  assert.ok(Math.abs(e.net - (l.net + c.net)) < 1e-6);
+  assert.ok(Math.abs(e.annual.net - e.net * 300) < 1e-3);
+  // une demi-journée porte la moitié des coûts fixes
+  const half = TQ.economics(Object.assign({}, s, { elapsedH: 12, cab: undefined }));
+  assert.ok(Math.abs(half.capital - l.capital / 2) < 1e-6);
+  assert.strictEqual(TQ.economics({ elapsedH: 24 }).net, 0);
+});
+
+test('les recettes des Cybercab suivent le tarif', () => {
+  const s = run({ line: 'none', cab: 'corridor', fleet: 600 }, 4, 5 * 3600).summary();
+  const perRide = s.cab.revenue / (s.cab.rides / TQ.PARAMS.cab.occupancy);
+  assert.ok(perRide > TQ.PARAMS.cab.fareBase && perRide < 40, 'recette par course ' + perRide);
+});

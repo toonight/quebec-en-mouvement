@@ -3,6 +3,12 @@
   const TQ = window.TQ, $ = (id) => document.getElementById(id);
   const fmt = new Intl.NumberFormat('fr-CA', { maximumFractionDigits: 0 });
   const fmt1 = new Intl.NumberFormat('fr-CA', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+  // montant en dollars : [nombre, unité], par exemple ['−1,2', 'M$']
+  const money = (v) => {
+    const a = Math.abs(v), sg = v < -0.5 ? '−' : '';
+    return a >= 1e9 ? [sg + fmt1.format(a / 1e9), 'G$'] : a >= 1e6 ? [sg + fmt1.format(a / 1e6), 'M$'] : a >= 1e3 ? [sg + fmt.format(a / 1e3), 'k$'] : [sg + fmt.format(a), '$'];
+  };
+  const moneyText = (v) => money(v).join(' ');
   const COLORS = { tram: [255, 200, 61], bus: [82, 182, 255], cab: [255, 92, 147], car: [205, 216, 230] };
   const MODE_META = [
     ['auto', 'Automobile', '#cdd8e6'], ['rtc', 'Autobus actuels', '#6f86a3'], ['actif', 'Marche et vélo', '#3ecf8e'],
@@ -16,7 +22,7 @@
 
   function fail(msg) { status.hidden = false; status.textContent = msg; }
   if (!window.TQ_DATA) return fail('Les données du réseau sont introuvables. Lancez « python scripts/build_data.py », puis rechargez la page.');
-  if (!TQ || !TQ.Simulation || !TQ.ASSUMPTIONS) return fail('Un fichier du simulateur est manquant. Rechargez la page.');
+  if (!TQ || !TQ.Simulation || !TQ.economics || !TQ.ASSUMPTIONS) return fail('Un fichier du simulateur est manquant. Rechargez la page.');
   if (!window.maplibregl || !window.deck) return fail('La carte n\'a pas pu se charger. Vérifiez la connexion Internet, puis rechargez la page.');
 
   // ------------------------------------------------------------------ initialisation
@@ -223,6 +229,15 @@
       kpi('k-rides', fmt.format(s.cab.rides)); kpi('k-cwait', fmt1.format(s.cab.avgWait), 'min');
       kpi('k-empty', fmt.format(s.cab.emptyShare * 100), '%'); kpi('k-unserved', fmt.format(s.cab.unserved));
     }
+    $('sec-econ').hidden = !L && !F;
+    if (L || F) {
+      const e = TQ.economics(s);
+      kpi('k-rev', ...money(e.revenue)); kpi('k-opex', ...money(e.opex));
+      kpi('k-oper', ...money(e.operating)); kpi('k-net', ...money(e.net));
+      $('k-oper').style.color = e.operating < 0 ? 'var(--bad)' : 'var(--ok)';
+      $('k-net').style.color = e.net < 0 ? 'var(--bad)' : 'var(--ok)';
+      setText('k-capex', `Investissement à amortir : ${e.parts.map((p) => `${moneyText(p.capex)} (${p.kind === 'tram' ? 'tramway' : p.kind === 'bus' ? 'voies réservées et bus' : 'Cybercab et recharge'})`).join(' + ')}.`);
+    }
     setText('k-co2', fmt1.format(Math.abs(s.co2Avoided)));
     setText('k-co2-label', s.co2Avoided >= 0 ? 'tonnes de CO₂ évitées depuis le départ' : 'tonnes de CO₂ ajoutées depuis le départ');
     drawChart(lineHex);
@@ -253,12 +268,18 @@
     const X = x(sim.t); g.fillStyle = '#eef3f8'; g.fillRect(X, 0, 1.5, base);
   }
 
+  function econCells(s) {
+    if (!s.line && !s.cab) return '<td>–</td><td>–</td><td>–</td><td>–</td>';
+    const e = TQ.economics(s), col = (v) => `style="color:var(--${v < 0 ? 'bad' : 'ok'})"`;
+    return `<td>${moneyText(e.capex)}</td><td ${col(e.annual.operating)}>${moneyText(e.annual.operating)}</td><td ${col(e.annual.net)}>${moneyText(e.annual.net)}</td><td ${col(e.net)}>${e.net < 0 ? '−' : ''}${fmt1.format(Math.abs(e.netPerRider))} $</td>`;
+  }
+
   function renderCompare() {
     state.histLen = sim.history.length;
     const el = $('compare');
     if (!sim.history.length) { el.innerHTML = '<p class="empty">Aucune journée terminée pour l\'instant. Choisissez la vitesse « Maximum » : une journée complète prend environ une minute.</p>'; return; }
-    const rows = sim.history.map((s) => `<tr><td>${esc(s.label)}</td><td>${fmt.format(s.line ? s.line.boardings : 0)}</td><td>${s.line ? fmt.format(s.line.peakLoad) : '–'}</td><td>${s.line ? fmt1.format(s.line.speed) : '–'}</td><td>${s.cab ? fmt.format(s.cab.rides) : '–'}</td><td>${s.cab ? fmt.format(s.cab.emptyShare * 100) + ' %' : '–'}</td><td>${fmt.format(s.carsRemoved)}</td><td>${fmt1.format(s.avgSpeed)}</td><td>+${fmt.format(s.congestion * 100)} %</td><td>${fmt1.format(s.co2Avoided)}</td></tr>`).join('');
-    el.innerHTML = `<div class="table-wrap"><table><thead><tr><th>Scénario</th><th>Montées sur la ligne</th><th>Charge max. par heure</th><th>Vitesse de la ligne (km/h)</th><th>Passagers Cybercab</th><th>Km à vide</th><th>Trajets auto évités</th><th>Vitesse auto (km/h)</th><th>Temps perdu</th><th>CO₂ évité (t)</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+    const rows = sim.history.map((s) => `<tr><td>${esc(s.label)}</td><td>${fmt.format(s.line ? s.line.boardings : 0)}</td><td>${s.line ? fmt.format(s.line.peakLoad) : '–'}</td><td>${s.line ? fmt1.format(s.line.speed) : '–'}</td><td>${s.cab ? fmt.format(s.cab.rides) : '–'}</td><td>${s.cab ? fmt.format(s.cab.emptyShare * 100) + ' %' : '–'}</td><td>${fmt.format(s.carsRemoved)}</td><td>${fmt1.format(s.avgSpeed)}</td><td>+${fmt.format(s.congestion * 100)} %</td><td>${fmt1.format(s.co2Avoided)}</td>${econCells(s)}</tr>`).join('');
+    el.innerHTML = `<div class="table-wrap"><table><thead><tr><th>Scénario</th><th>Montées sur la ligne</th><th>Charge max. par heure</th><th>Vitesse de la ligne (km/h)</th><th>Passagers Cybercab</th><th>Km à vide</th><th>Trajets auto évités</th><th>Vitesse auto (km/h)</th><th>Temps perdu</th><th>CO₂ évité (t)</th><th>Investissement</th><th>Résultat d'exploitation par an</th><th>Résultat par an, investissement compris</th><th>Résultat par passager</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   }
 
   // ------------------------------------------------------------------ commandes

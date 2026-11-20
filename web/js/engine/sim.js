@@ -143,7 +143,7 @@
       this.m = {
         trips: 0, modes: { auto: 0, rtc: 0, actif: 0, autre: 0, line: 0, cab: 0 },
         lineFrom: { auto: 0, rtc: 0, actif: 0 }, cabFrom: { auto: 0, rtc: 0, actif: 0, line: 0 },
-        carsRemoved: 0, divertedCarKm: 0, local: 0, cabUnserved: 0, crowKm: 0,
+        carsRemoved: 0, divertedCarKm: 0, local: 0, cabUnserved: 0, crowKm: 0, cabRevenue: 0,
       };
       this.series = { t: [], speed: [], congestion: [], lineLoad: [], lineBoard: [], cabWait: [], cars: [] };
       this.lastBoard = 0;
@@ -303,7 +303,7 @@
         else if (base === 1) p = TQ.sigmoid(P.theta * (gtRtc - gtCab - 2));
         else p = km > 1.2 ? 0.3 * TQ.sigmoid(P.theta * (gtAct - gtCab - 4)) : 0;
         if (rnd() < p) {
-          if (this.fleet.request(o, d, this.t, zone)) { m.cabFrom[mode === 4 ? 'line' : MODES[base]] += sc; mode = 5; }
+          if (this.fleet.request(o, d, this.t, zone)) { m.cabFrom[mode === 4 ? 'line' : MODES[base]] += sc; m.cabRevenue += (fare * sc) / C.occupancy; mode = 5; }
           else m.cabUnserved += sc;
         }
       }
@@ -340,7 +340,7 @@
       if (F) {
         const s = F.stats, empty = ns[1].vkm, loaded = ns[2].vkm;
         out.cab = {
-          fleet: F.fleetReal, rides: s.ridesPersons, requests: s.requests * P.scale, unserved: m.cabUnserved, avgWait: s.waitN ? s.waitSum / s.waitN : 0,
+          fleet: F.fleetReal, rides: s.ridesPersons, revenue: m.cabRevenue, requests: s.requests * P.scale, unserved: m.cabUnserved, avgWait: s.waitN ? s.waitSum / s.waitN : 0,
           vkmEmpty: empty, vkmLoaded: loaded, emptyShare: empty + loaded > 0 ? empty / (empty + loaded) : 0,
           kwh: (empty + loaded) * F.kwhKm, ridesPerVeh: s.ridesPersons / P.cab.occupancy / F.fleetReal, charges: s.charges * F.w,
         };
