@@ -28,6 +28,8 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     permissions:
+      contents: read
+      actions: read # pour retrouver l'archive du site envoyée par ce même flux
       pages: write
       id-token: write
     environment:
