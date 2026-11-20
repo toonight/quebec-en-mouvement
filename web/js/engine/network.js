@@ -3,7 +3,7 @@
   const TQ = typeof window !== 'undefined' ? window.TQ : globalThis.TQ;
 
   class Network {
-    constructor(data) {
+    constructor(data, opts) {
       const P = TQ.PARAMS;
       this.data = data;
       const E = data.edges.a.length, N = data.nodes.length;
@@ -72,7 +72,8 @@
       this.ecntC = new Float32Array(E); this.eflowC = new Float32Array(E);
       this.tnextC = new Array(this.D); this.tdistC = new Array(this.D);
       this.setConditions({ laneDrop: false, winter: false });
-      for (let d = 0; d < this.D; d++) this.computeTree(d);
+      // Simulation.reset() recalcule tous les arbres juste après : inutile de les calculer deux fois
+      if (!opts || opts.trees !== false) for (let d = 0; d < this.D; d++) this.computeTree(d);
       this.cabKm = null; // odomètres de la flotte (posés par CabFleet)
       this.cabIdx = null; // véhicule qui porte chaque agent de la flotte (posé par CabFleet)
       this.initVehicles();
@@ -159,18 +160,20 @@
         size--;
         if (size > 0) {
           const lk = hKey[size], ln = hNode[size];
+          hKey[size] = Infinity; // sentinelle juste après le tas : le plus petit enfant se choisit sans branchement
           let i = 0;
           for (;;) {
             let c = 2 * i + 1;
             if (c >= size) break;
-            if (c + 1 < size && hKey[c + 1] < hKey[c]) c++;
-            if (hKey[c] >= lk) break;
-            hKey[i] = hKey[c]; hNode[i] = hNode[c]; i = c;
+            c += +(hKey[c + 1] < hKey[c]);
+            const ck = hKey[c];
+            if (ck >= lk) break;
+            hKey[i] = ck; hNode[i] = hNode[c]; i = c;
           }
           hKey[i] = lk; hNode[i] = ln;
         }
         if (key > dist[node]) continue;
-        for (let k = inStart[node]; k < inStart[node + 1]; k++) {
+        for (let k = inStart[node], kEnd = inStart[node + 1]; k < kEnd; k++) {
           const e = inEdge[k], a = ea[e], nd = key + ett[e];
           if (nd < dist[a]) {
             dist[a] = nd; next[a] = e;
@@ -185,7 +188,8 @@
         }
       }
       const out = td[d];
-      for (let n = 0; n < N; n++) out[n] = dist[n] > 65000 ? 65535 : Math.round(dist[n]);
+      // (v + 0.5) | 0 vaut Math.round(v) ici : v est positif et inférieur à 65 000
+      for (let n = 0; n < N; n++) { const v = dist[n]; out[n] = v > 65000 ? 65535 : (v + 0.5) | 0; }
     }
 
     /** Recalcule n arbres à tour de rôle. */

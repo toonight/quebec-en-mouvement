@@ -11,7 +11,7 @@
       this.data = data;
       this.P = TQ.PARAMS;
       this.seed = opts.seed || 20261119;
-      this.net = new TQ.Network(data);
+      this.net = new TQ.Network(data, { trees: false });
       // line : none | tram | bus | cablane (voie réservée aux Cybercab : un seul type de véhicule par voie) ;
       // pool : courses partagées ; carFree : part des résidents de la zone desservie qui renoncent à leur auto
       this.scenario = Object.assign({ line: 'none', cab: 'off', fleet: 3000, farePerKm: this.P.cab.farePerKm, winter: false, pool: false, carFree: 0, auto: false }, opts.scenario || {});

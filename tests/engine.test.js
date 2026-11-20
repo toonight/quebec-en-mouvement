@@ -17,6 +17,13 @@ test('les données décrivent bien la ligne TramCité', () => {
   for (let i = 1; i < 29; i++) assert.ok(data.line.stations[i].s > data.line.stations[i - 1].s + 300);
 });
 
+test('les données servies à la page (network.js) sont identiques à network.json', () => {
+  const vm = require('node:vm'), fs = require('node:fs'), path = require('node:path');
+  const ctx = { window: {} };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'web', 'data', 'network.js'), 'utf8'), ctx);
+  assert.strictEqual(JSON.stringify(ctx.window.TQ_DATA), JSON.stringify(data));
+});
+
 test('tout point de demande est joignable depuis tout noeud', () => {
   const net = new TQ.Network(data);
   for (let d = 0; d < net.D; d += 37) for (let n = 0; n < net.N; n += 11) assert.ok(net.tdist[d][n] < 65535);

@@ -666,6 +666,57 @@ def build_counts(nodes, segs, edges):
     return out
 
 
+# Décodeur placé à la fin de web/data/network.js : il remet window.TQ_DATA exactement comme data/network.json.
+DECODER = """(function(D){var q=D.nodes,N=[],x=0,y=0,i;for(i=0;i<q.length;i+=2){x+=q[i];y+=q[i+1];N.push([x/1e6,y/1e6]);}D.nodes=N;var e=D.edges;function u(a){for(var i=1;i<a.length;i++)a[i]+=a[i-1];}u(e.a);u(e.seg);u(e.name);for(i=0;i<e.b.length;i++)e.b[i]+=e.a[i];["rev","cor","lanes","cls"].forEach(function(k){e[k]=Array.from(e[k],Number);});var n=D.segs.n,d=D.segs.d,S=new Array(n.length),A=new Array(n.length),B=new Array(n.length),k=0,s;for(i=e.a.length-1;i>=0;i--){s=e.seg[i];A[s]=e.rev[i]?e.b[i]:e.a[i];B[s]=e.rev[i]?e.a[i]:e.b[i];}for(s=0;s<n.length;s++){var a=N[A[s]],b=N[B[s]],c=[[a[0],a[1]]];x=Math.round(a[0]*1e6);y=Math.round(a[1]*1e6);for(i=0;i<n[s];i++){x+=d[k++];y+=d[k++];c.push([x/1e6,y/1e6]);}c.push([b[0],b[1]]);S[s]=c;}D.segs=S;})(window.TQ_DATA);"""
+
+
+def pack(data):
+    """Forme compacte servie à la page (moitié moins lourde une fois compressée) : coordonnées en micro-degrés
+    entiers et en différences. Chaque hypothèse est vérifiée : mieux vaut un build qui échoue qu'un fichier faux."""
+    def I(v):
+        n = round(v * 1e6)
+        assert n / 1e6 == v, v
+        return n
+
+    def delta(a):
+        return [v - p for v, p in zip(a, [0] + a[:-1])]
+
+    def digits(a):
+        assert all(type(v) is int and 0 <= v <= 9 for v in a)
+        return "".join(map(str, a))
+
+    E, nodes, segs = data["edges"], data["nodes"], data["segs"]
+    o, e = dict(data), dict(E)
+    flat = [I(c) for p in nodes for c in p]
+    o["nodes"] = [v - (flat[i - 2] if i > 1 else 0) for i, v in enumerate(flat)]
+    e.update(a=delta(E["a"]), b=[b - a for a, b in zip(E["a"], E["b"])], seg=delta(E["seg"]), name=delta(E["name"]),
+             rev=digits(E["rev"]), cor=digits(E["cor"]), lanes=digits(E["lanes"]), cls=digits(E["cls"]))
+    o["edges"] = e
+    ends = {}
+    for a, b, s, r in zip(E["a"], E["b"], E["seg"], E["rev"]):
+        ends.setdefault(s, (b, a) if r else (a, b))
+    n, d = [], []
+    for s, c in enumerate(segs):
+        a, b = ends[s]
+        assert list(c[0]) == list(nodes[a]) and list(c[-1]) == list(nodes[b]) and len(c[0]) == 2, s
+        n.append(len(c) - 2)
+        x, y = I(c[0][0]), I(c[0][1])
+        for p in c[1:-1]:
+            X, Y = I(p[0]), I(p[1])
+            d += [X - x, Y - y]
+            x, y = X, Y
+    o["segs"] = dict(n=n, d=d)
+    return o
+
+
+def write_web(data):
+    """Écrit web/data/network.js à partir des données complètes (celles de data/network.json)."""
+    packed = json.dumps(pack(data), ensure_ascii=False, separators=(",", ":"))
+    with open(os.path.join(ROOT, "web", "data", "network.js"), "w", encoding="utf-8", newline="\n") as f:
+        f.write("window.TQ_DATA=" + packed + ";" + DECODER + "\n")
+    print(f"écrit : web/data/network.js ({len(packed)/1e6:.2f} Mo)")
+
+
 def main():
     nodes, segs, edges = build_graph()
     line, lpts, lcum = build_line()
@@ -691,11 +742,13 @@ def main():
     js = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
     with open(os.path.join(ROOT, "data", "network.json"), "w", encoding="utf-8") as f:
         f.write(js)
-    with open(os.path.join(ROOT, "web", "data", "network.js"), "w", encoding="utf-8") as f:
-        f.write("window.TQ_DATA=" + js + ";\n")
-    print(f"écrit : web/data/network.js ({len(js)/1e6:.2f} Mo)")
+    write_web(json.loads(js))  # relu depuis le texte : exactement ce que contient network.json
 
 
 if __name__ == "__main__":
     sys.stdout.reconfigure(encoding="utf-8")
+    if "--web" in sys.argv:  # ne régénère que web/data/network.js, à partir de data/network.json
+        with open(os.path.join(ROOT, "data", "network.json"), encoding="utf-8") as f:
+            write_web(json.load(f))
+        sys.exit(0)
     main()
