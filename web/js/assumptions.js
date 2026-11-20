@@ -63,6 +63,7 @@
       'La demande totale est fixe : pas de déplacements induits par un nouveau service.',
       'Le CO₂ évité compte les kilomètres d\'auto remplacés, moins les émissions du nouveau service. Il ignore la fabrication des véhicules et des infrastructures.',
       'Journée d\'hiver : capacité des rues réduite de 10 %, vitesses de 8 %, consommation des Cybercab majorée de 35 % (hypothèses).',
+      'Autos toutes autonomes et connectées (supposition, aucune ville ne fonctionne ainsi) : sans feux, chaque voie de rue écoule 80 % de véhicules de plus et la vitesse libre monte de 25 % ; sur autoroute, les pelotons ajoutent 40 % de capacité. Le retard qui grandit avec la charge (feux, entrecroisements) est presque supprimé. Le parc est électrique : le CO₂ évité compte alors toutes les autos qui ne brûlent plus d\'essence. Ne sont pas comptés : le coût de remplacement de toutes les autos, les piétons et cyclistes aux carrefours, les déplacements à vide et les nouveaux déplacements que cette facilité susciterait.',
     ] },
   ];
 })();

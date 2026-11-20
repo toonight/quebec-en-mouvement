@@ -14,7 +14,7 @@
       this.net = new TQ.Network(data);
       // line : none | tram | bus | cablane (voie réservée aux Cybercab : un seul type de véhicule par voie) ;
       // pool : courses partagées ; carFree : part des résidents de la zone desservie qui renoncent à leur auto
-      this.scenario = Object.assign({ line: 'none', cab: 'off', fleet: 3000, farePerKm: this.P.cab.farePerKm, winter: false, pool: false, carFree: 0 }, opts.scenario || {});
+      this.scenario = Object.assign({ line: 'none', cab: 'off', fleet: 3000, farePerKm: this.P.cab.farePerKm, winter: false, pool: false, carFree: 0, auto: false }, opts.scenario || {});
       this.history = [];
       this.day = 1;
       this.prepareDemand();
@@ -118,6 +118,7 @@
 
     // ------------------------------------------------------------------ état
     reset(start) {
+      this.resets = (this.resets || 0) + 1; // l'affichage s'en sert pour oublier les véhicules de la journée précédente
       const sc = this.scenario, P = this.P;
       // flux aléatoires indépendants : la demande tirée ne dépend pas du scénario
       // et chaque journée rejoue le même tirage : les journées comparées, et la référence, ont la même demande
@@ -129,7 +130,7 @@
       // la voie du tracé sert aux Cybercab quand elle leur est réservée
       this.cabLane = sc.cab !== 'off' && sc.line === 'cablane';
       // sans flotte, la voie réservée aux Cybercab n'existe pas : les autos gardent leurs voies
-      this.net.setConditions({ laneDrop: sc.line === 'tram' || sc.line === 'bus' || this.cabLane, winter: sc.winter, cabLane: this.cabLane });
+      this.net.setConditions({ laneDrop: sc.line === 'tram' || sc.line === 'bus' || this.cabLane, winter: sc.winter, cabLane: this.cabLane, auto: !!sc.auto });
       this.net.resetTraffic();
       for (let d = 0; d < this.net.D; d++) { this.net.computeTree(d); if (this.cabLane) this.net.computeTree(d, true); }
       this.line = sc.line === 'none' || sc.line === 'cablane' ? null : new TQ.TransitLine(this.data.line, sc.line, rndLine, sc.winter);
@@ -171,6 +172,7 @@
       if (s.carFree > 0) extra.push(`${Math.round(s.carFree * 100)} % sans auto`);
       if (s.cab !== 'off') parts.push(`Cybercab ${s.cab === 'corridor' ? 'corridor' : 'réseau élargi'} (${[s.fleet.toLocaleString('fr-CA'), ...extra].join(', ')})`);
       if (!parts.length) parts.push('Référence (situation actuelle)');
+      if (s.auto) { if (parts[0] === 'Référence (situation actuelle)') parts[0] = 'Autos autonomes, sans feux'; else parts.push('autos autonomes'); }
       if (s.winter) parts.push('hiver');
       return parts.join(' + ');
     }
@@ -392,7 +394,10 @@
         };
         co2Added += out.cab.kwh * P.gridCO2;
       }
-      out.co2Avoided = (m.divertedCarKm * P.carCO2 - co2Added) / 1000; // tonnes
+      // parc autonome : toutes les autos sont électriques, celles qui roulent encore n'émettent presque plus
+      const auto = !!this.scenario.auto, carCO2 = auto ? P.auto.kwhKm * P.gridCO2 : P.carCO2;
+      // (un kilomètre d'auto supprimé reste compté au facteur du parc actuel, à essence : même base pour les deux termes)
+      out.co2Avoided = (m.divertedCarKm * P.carCO2 - co2Added + (auto ? ns[0].vkm * (P.carCO2 - carCO2) : 0)) / 1000; // tonnes
       out.roadVkm = ns[0].vkm + ns[1].vkm + ns[2].vkm;
       return out;
     }

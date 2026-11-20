@@ -30,8 +30,16 @@ Le dossier `web/` est un site statique : il se publie tel quel, par exemple sur 
 ## Utiliser
 
 - **Scénario** : mode sur le tracé (un seul type de véhicule par voie), zone et taille de la
-  flotte de Cybercab, tarif, courses partagées, résidents sans auto, journée d'hiver.
-- **Vue 3D** : la ville en volume, avec chaque véhicule dessiné sur sa voie. Un véhicule du
+  flotte de Cybercab, tarif, courses partagées, résidents sans auto, journée d'hiver,
+  parc d'autos entièrement autonome et connecté (plus de feux aux carrefours).
+- **Autos autonomes et connectées** : supposition extrême où tout le parc est remplacé par des
+  autos électriques qui se coordonnent. Le coût de ce remplacement n'est pas compté.
+- **Vue 3D** : la ville en volume, rues avec trottoirs, marquages, passages piétons, rails du
+  tramway et arbres des parcs, avec chaque véhicule dessiné sur sa voie. Chaque auto se suit du départ à
+  l'arrivée : elle garde sa couleur et sa voie, tourne aux carrefours et la journée défile en temps réel.
+- **Bâtiments réels** (facultatif) : en vue 3D, la ville photographiée en 3D par Google remplace les volumes
+  dessinés. Il faut une clé d'API Google Maps Platform personnelle (« Map Tiles API », facturation à votre
+  nom) ; elle reste dans le navigateur, n'est envoyée qu'à Google et n'est jamais écrite dans ce dépôt. Un véhicule du
   moteur représente environ quatre autos réelles ; en vue 3D, elles sont toutes dessinées.
 - **Temps** : pause, vitesse (du temps réel au maximum), reprise à 5 h, 7 h, midi ou 16 h.
 - **Comparer les journées simulées** : chaque journée complète s'ajoute à deux tableaux,

@@ -108,8 +108,18 @@ footer { display: grid; gap: 4px; }
 .key { width: 14px; height: 3px; display: inline-block; border-radius: 2px; }
 .k-cong { background: var(--bad); } .k-line { background: var(--tram); margin-left: 12px; }
 
-.mapbtn { position: fixed; top: 12px; left: 336px; z-index: 5; background: var(--slate); color: var(--snow); border: 1px solid var(--line); border-radius: 4px; padding: 8px 14px; font-weight: 500; }
+.mapbar { position: fixed; top: 12px; left: 336px; z-index: 5; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; max-width: calc(100vw - 700px); pointer-events: none; }
+.mapbar > * { pointer-events: auto; }
+.mapbtn { background: var(--slate); color: var(--snow); border: 1px solid var(--line); border-radius: 4px; padding: 8px 14px; font-weight: 500; }
 .mapbtn:hover { border-color: var(--snow); }
+.mapbadge { margin: 0; background: rgba(12, 21, 34, .88); color: #60e2d4; border: 1px solid #60e2d4; border-radius: 4px; padding: 8px 12px; font-size: 13px; font-weight: 500; }
+.autos:not(.v3d) .dot.car { background: #60e2d4; }
+.only3d { display: none; } .v3d .only3d:not([hidden]) { display: inline-block; }
+.mapnote { flex: 1 1 100%; margin: 0; align-self: flex-start; width: fit-content; max-width: 460px; background: rgba(255, 255, 255, .88); color: #333; border-radius: 4px; padding: 4px 8px; font-size: 11px; }
+.mapnote b { font-size: 13px; font-weight: 600; } .mapnote .link { font-size: 11px; color: #1a4f8a; }
+.keyform label { display: block; font-weight: 500; margin-top: 14px; }
+.keyform input { width: 100%; margin-top: 6px; padding: 9px 10px; background: var(--night); color: var(--snow); border: 1px solid var(--line); border-radius: 4px; font: inherit; }
+.keyform .hint { min-height: 1.4em; }
 .mapbtn[aria-pressed="true"] { background: var(--snow); color: var(--night); }
 .v3d .maplibregl-ctrl-attrib.maplibregl-compact, .v3d .maplibregl-ctrl.maplibregl-ctrl-attrib { background: rgba(255, 255, 255, .85); color: #333; }
 .v3d .maplibregl-ctrl-attrib a { color: #333; }
@@ -188,7 +198,10 @@ input[type=range] { height: 24px; }
   #map { position: sticky; inset: 0 auto auto auto; height: 36vh; order: 1; flex: none; z-index: 5; }
   .dock { order: 2; position: sticky; top: 36vh; z-index: 6; margin: 0; border-radius: 0; border-left: 0; border-right: 0; height: auto; flex-wrap: wrap; gap: 8px 12px; padding: 8px 12px; background: var(--slate); }
   .panel { position: static; z-index: 0; width: auto; max-height: none; margin: 8px; height: auto; flex: none; overflow: visible; }
-  .mapbtn { top: 8px; left: 8px; z-index: 7; padding: 6px 10px; }
+  .mapbar { top: 8px; left: 8px; z-index: 7; max-width: calc(100vw - 16px); }
+  .mapbtn { padding: 6px 10px; }
+  .maplibregl-ctrl-attrib.maplibregl-compact, .maplibregl-ctrl.maplibregl-ctrl-attrib { max-width: calc(100vw - 70px); }
+  .mapbadge { padding: 6px 10px; font-size: 12px; }
   .panel-right { order: 3; }
   .panel-left { order: 4; }
   .brand h1 { font-size: 24px; }

@@ -54,7 +54,9 @@
     if (f) sc.fleet = Math.round(f / 100) * 100;
     if (p) sc.farePerKm = Math.round(p * 10) / 10;
     if (q.get('hiver') === '1') sc.winter = true;
-    state.view3d = q.get('vue') === '3d';
+    if (q.get('auto') === '1') sc.auto = true;
+    // « photo » : vue 3D avec les bâtiments réels ; la clé d'API, elle, ne figure jamais dans le lien
+    state.view3d = q.get('vue') === '3d' || q.get('vue') === 'photo'; state.wantPhoto = q.get('vue') === 'photo';
     if (q.get('partage') === '1') sc.pool = true;
     const nc = num('sansauto', 0, 30);
     if (nc) sc.carFree = Math.round(nc) / 100;
@@ -70,12 +72,19 @@
     return sc;
   }
 
+  /** Légende des autos : un point pour quatre en plan, une maquette par auto en vue 3D. */
+  function legendCars() {
+    const a = sim && sim.scenario.auto;
+    $('lg-car').textContent = state.view3d ? (a ? '1 véhicule = 1 auto autonome' : '1 véhicule = 1 automobile') : a ? '1 point = 4 autos autonomes' : '1 point = 4 automobiles';
+  }
+
   function writeHash() {
     const s = sim.scenario, q = new URLSearchParams();
     q.set('ligne', s.line); q.set('cab', s.cab);
     if (s.cab !== 'off') { q.set('flotte', s.fleet); q.set('tarif', s.farePerKm); }
     if (s.winter) q.set('hiver', '1');
-    if (state.view3d) q.set('vue', '3d');
+    if (s.auto) q.set('auto', '1');
+    if (state.view3d) q.set('vue', state.photo ? 'photo' : '3d');
     if (s.cab !== 'off' && s.pool) q.set('partage', '1');
     if (s.cab !== 'off' && s.carFree > 0) q.set('sansauto', Math.round(s.carFree * 100));
     for (const id in COSTS) if (dig(TQ.ECON, COSTS[id][0]) !== dig(TQ.ECON_DEFAULTS, COSTS[id][0])) q.set(id, costValue(id));
@@ -88,7 +97,9 @@
     const check = (group, attr, v) => $(group).querySelectorAll('button').forEach((b) => { const on = b.dataset[attr] === String(v); b.setAttribute('aria-checked', String(on)); b.tabIndex = on ? 0 : -1; });
     check('line-choice', 'line', s.line); check('cab-choice', 'cab', s.cab); check('speeds', 'speed', state.speed);
     $('cab-options').hidden = s.cab === 'off';
-    $('fleet').value = s.fleet; $('fare').value = s.farePerKm; $('winter').checked = !!s.winter;
+    $('fleet').value = s.fleet; $('fare').value = s.farePerKm; $('winter').checked = !!s.winter; $('auto').checked = !!s.auto; $('auto-hint').hidden = !s.auto;
+    // le parc autonome se voit sur la carte : bandeau, légende et couleur des autos
+    $('auto-badge').hidden = !s.auto; document.body.classList.toggle('autos', !!s.auto); legendCars();
     $('pool').checked = !!s.pool; $('carfree').value = Math.round((s.carFree || 0) * 100);
     $('carfree-out').textContent = Math.round((s.carFree || 0) * 100) + ' %';
     $('fleet-out').textContent = fmt.format(s.fleet); $('fare-out').textContent = fmt2.format(s.farePerKm) + ' $';
@@ -154,8 +165,9 @@
     state.allChars = [...new Set(stationData.map((s) => s.name).join(''))];
     state.twoWay = roadData.filter((r) => r.two);
     // marquages posés quelques centimètres au-dessus de l'asphalte, pour une superposition nette
-    for (const r of state.twoWay) r.path3 = r.path.map((c) => [c[0], c[1], 0.06]);
-    for (const part of lineParts) part.path3 = part.path.map((c) => [c[0], c[1], 0.12]);
+    for (const r of roadData) { r.path3 = r.path.map((c) => [c[0], c[1], 0.06]); const c = net.ecls[r.edges[0]]; r.fast = c === 0 || c === 1 || c === 5; }
+    state.streets = roadData.filter((r) => !r.fast);
+    for (const part of lineParts) { part.path3 = part.path.map((c) => [c[0], c[1], 0.12]); part.path4 = part.path.map((c) => [c[0], c[1], 0.17]); }
   }
 
   function initMap() {
@@ -171,20 +183,17 @@
     map.addControl(overlay);
     window.tqMap = map;
     $('view3d').addEventListener('click', () => { setView3d(!state.view3d); writeHash(); });
-    if (state.view3d) { document.body.classList.add('v3d'); $('view3d').setAttribute('aria-pressed', 'true'); $('view3d').textContent = 'Vue en plan'; map.jumpTo({ pitch: 62, bearing: -24, zoom: 16.9, center: sim.stationLL[stationData.findIndex((d) => d.name === 'Saint-Roch')] || [-71.2265, 46.8135] }); }
+    // les arbres des parcs et des boisés sont replantés quand la vue s'arrête de bouger
+    map.on('idle', () => { if (state.view3d) plantTrees(); });
+    if (state.view3d) { pace3d(true); document.body.classList.add('v3d'); $('view3d').setAttribute('aria-pressed', 'true'); $('view3d').textContent = 'Vue en plan'; map.jumpTo({ pitch: 62, bearing: -24, zoom: 16.9, center: sim.stationLL[stationData.findIndex((d) => d.name === 'Saint-Roch')] || [-71.2265, 46.8135] }); }
+    initPhoto();
+    if (state.view3d && state.wantPhoto) setPhoto(true);
     // en vue 3D, les icônes et libellés de commerces du fond de carte encombrent la scène
     map.on('styledata', () => {
       if (!state.view3d || state.styled3d === map.getStyle().name + map.getStyle().layers.length) return;
       state.styled3d = map.getStyle().name + map.getStyle().layers.length;
       try {
-        for (const l of map.getStyle().layers) {
-          if (l.type === 'symbol' && /poi|housenumber|shield/.test(l.id)) map.setLayoutProperty(l.id, 'visibility', 'none');
-          else if (l.type === 'symbol' && !state.labelLayer3d) state.labelLayer3d = l.id;
-          // rues du fond de carte : le même asphalte que les artères simulées
-          if (l.type === 'line' && /^(road|bridge|tunnel|highway)/.test(l.id) && !/rail|path|pedestrian|track|steps|ferry|area|pattern/.test(l.id)) map.setPaintProperty(l.id, 'line-color', /casing|outline/.test(l.id) ? '#6f757c' : '#8b9198');
-          // bâtiments : pierre claire pour les maisons, verre bleuté pour les tours
-          if (l.type === 'fill-extrusion') { map.setPaintProperty(l.id, 'fill-extrusion-color', ['interpolate', ['linear'], ['coalesce', ['get', 'render_height'], 6], 0, '#efe6d6', 12, '#e0d3bd', 30, '#c9ccd0', 70, '#a9bccd', 150, '#8aa5c0']); map.setPaintProperty(l.id, 'fill-extrusion-opacity', 0.96); }
-        }
+        dress3d();
         state.labelLayer = state.labelLayer3d;
         if (map.setSky) map.setSky({ 'sky-color': '#8ec5ee', 'horizon-color': '#e4eef5', 'fog-color': '#eef3f6', 'sky-horizon-blend': 0.7, 'horizon-fog-blend': 0.6, 'fog-ground-blend': 0.75 });
         map.setLight({ anchor: 'map', position: [1.4, 215, 42], intensity: 0.45, color: '#fff6e4' });
@@ -192,14 +201,59 @@
     });
   }
 
+  /**
+   * Habillage du fond de carte en vue 3D : toutes les rues deviennent de l'asphalte bordé de trottoirs, à leur
+   * largeur réelle en mètres ; pelouses, parcs et eau prennent des teintes franches ; les bâtiments varient.
+   */
+  function dress3d() {
+    const mpp = (z) => 53575 / Math.pow(2, z); // mètres par pixel à la latitude de Québec (tuiles de 512 px)
+    const meters = (m) => ['interpolate', ['exponential', 2], ['zoom'], 12, Math.max(0.5, m / mpp(12)), 15, m / mpp(15), 20, m / mpp(20)];
+    const set = (id, k, v) => { try { map.setPaintProperty(id, k, v); } catch (e) { /* propriété absente de ce calque */ } };
+    const hide = (id) => map.setLayoutProperty(id, 'visibility', 'none');
+    // largeur de chaussée (m) et largeur des deux trottoirs ou accotements (m) par famille de rue
+    const ROADS = [[/motorway_link/, 6, 1.6, 1], [/motorway/, 11.5, 2.4, 1], [/trunk_primary/, 14, 5.2, 0], [/secondary_tertiary/, 10.5, 5, 0], [/service_track/, 4.2, 0.6, 1], [/link/, 6.5, 1.6, 1], [/minor|street/, 7.5, 4.6, 0]];
+    const FILLS = { background: '#b3bf9a', landuse_residential: '#a8bb8b', park: '#7fb069', landcover_wood: '#5f9a55', landcover_grass: '#8fbf6f', landuse_pitch: '#6dab62', landuse_track: '#b98a6a', landuse_cemetery: '#9db888', landuse_hospital: '#c6c2b0', landuse_school: '#c6c2b0', water: '#4f8fc0', landcover_sand: '#dfd2a6', building: '#a8a296', road_area_pattern: '#c2bfb4', aeroway_fill: '#b9b7ae' };
+    for (const l of map.getStyle().layers) {
+      const id = l.id;
+      if (l.type === 'symbol') {
+        if (/poi|housenumber|shield|one_way|highway-name/.test(id)) hide(id); else if (!state.labelLayer3d) state.labelLayer3d = id;
+        continue;
+      }
+      if (l.type === 'background') { set(id, 'background-color', FILLS.background); continue; }
+      if (l.type === 'fill' && FILLS[id]) { if (id === 'road_area_pattern') set(id, 'fill-pattern', undefined); set(id, 'fill-color', FILLS[id]); set(id, 'fill-opacity', 1); set(id, 'fill-outline-color', FILLS[id]); continue; }
+      if (l.type === 'line' && /^waterway/.test(id)) { set(id, 'line-color', FILLS.water); continue; }
+      if (l.type === 'line' && /park_outline|boundary/.test(id)) { hide(id); continue; }
+      if (l.type === 'line' && /^(road|bridge|tunnel)_/.test(id)) {
+        if (/^tunnel_|hatching/.test(id)) { hide(id); continue; }
+        if (/rail/.test(id)) { set(id, 'line-color', '#5f5b55'); set(id, 'line-width', meters(1.8)); set(id, 'line-dasharray', undefined); continue; }
+        if (/path_pedestrian/.test(id)) { set(id, 'line-color', /casing/.test(id) ? '#b4b1a6' : '#d6d0c0'); set(id, 'line-width', meters(/casing/.test(id) ? 2.8 : 2.2)); set(id, 'line-dasharray', undefined); continue; }
+        const fam = ROADS.find((r) => r[0].test(id));
+        if (!fam) continue;
+        const casing = /casing/.test(id);
+        set(id, 'line-color', !casing ? '#484c52' : fam[3] ? '#6c7076' : '#bcbab2');
+        set(id, 'line-width', meters(casing ? fam[1] + fam[2] : fam[1]));
+        set(id, 'line-opacity', 1); set(id, 'line-dasharray', undefined); set(id, 'line-gap-width', 0);
+        continue;
+      }
+      if (l.type === 'fill-extrusion') {
+        // façades : brique, pierre grise et crépi des quartiers ; verre bleuté pour les tours
+        const h = ['coalesce', ['get', 'render_height'], 6];
+        set(id, 'fill-extrusion-color', ['case', ['>', h, 60], '#8fa9c2', ['>', h, 32], '#aab7c2',
+          ['match', ['%', ['round', ['*', h, 13]], 6], 0, '#a8705a', 1, '#cbbda3', 2, '#d6d1c6', 3, '#9f978c', 4, '#b99c84', '#ddd5c4']]);
+        set(id, 'fill-extrusion-opacity', 1);
+      }
+    }
+    state.labelLayer = state.labelLayer3d;
+  }
+
   function tooltip({ object, layer }) {
     if (!object || !layer) return null;
-    if (layer.id === 'stations') {
+    if (layer.id === 'stations' || layer.id === 'stations3d') {
       const waiting = sim.line ? sim.line.waitingAt(object.i) : 0;
       const kind = object.hub ? 'Pôle d\'échanges' : object.underground && sim.scenario.line !== 'bus' ? 'Station souterraine' : 'Station';
       return { html: `<b>${esc(object.name)}</b><br>${kind}${sim.line ? `<br>${fmt.format(waiting)} personnes en attente<br>${fmt.format(sim.line.stationBoard[object.i])} montées depuis le départ` : ''}` };
     }
-    if (layer.id === 'line-veh') {
+    if (layer.id === 'line-veh' || layer.id === 'line-veh3d') {
       const L = sim.line, pct = Math.round((object.v.load * L.scale / L.p.capacity) * 100);
       const to = L.st[object.v.dir === 0 ? L.n - 1 : 0].name;
       return { html: `<b>${L.p.label}</b> vers ${esc(to)}<br>${fmt.format(object.v.load * L.scale)} passagers à bord (${pct} % de la capacité)` };
@@ -245,16 +299,427 @@
     moduleGlass: meshOf([[-0.47, 0.47, -0.48, 0.48, 0.48, 0.84]]),
   };
   const CAR_PAINT = [[232, 236, 240], [48, 56, 66], [150, 158, 168], [176, 44, 44], [38, 84, 150], [205, 208, 212], [28, 32, 38], [120, 132, 110]];
+  // parc entièrement autonome : une flotte homogène, aux teintes d'un seul constructeur (blanc surtout, gris, noir, bleu, rouge)
+  const AUTO_PAINT = [[240, 242, 244], [240, 242, 244], [240, 242, 244], [92, 98, 106], [22, 24, 28], [30, 62, 128], [166, 30, 36], [198, 202, 206]];
   const tmp4 = [0, 0, 0, 0];
+
+  /** En vue 3D la journée défile en temps réel : à ×120, une auto franchirait plusieurs rues entre deux images. */
+  function pace3d(on) {
+    if (on) { if (state.speed === 0 || state.speed > 30) { state.speedBefore = state.speed; state.speed = 1; } }
+    else if (state.speedBefore != null) { state.speed = state.speedBefore; state.speedBefore = null; }
+    document.querySelectorAll('#speeds [data-speed]').forEach((b) => { const sel = +b.dataset.speed === state.speed; b.setAttribute('aria-checked', String(sel)); b.tabIndex = sel ? 0 : -1; });
+  }
 
   function setView3d(on, instant) {
     state.view3d = on;
+    pace3d(on); legendCars();
+    if (!on) setPhoto(false);
     document.body.classList.toggle('v3d', on);
     $('view3d').setAttribute('aria-pressed', String(on));
     $('view3d').textContent = on ? 'Vue en plan' : 'Vue 3D';
-    map.setStyle(on ? STYLE_3D : STYLE_2D);
+    map.setStyle(on ? STYLE_3D : STYLE_2D, { diff: false }); // deux fonds sans rien de commun : inutile de les comparer
     const cam = on ? { pitch: 62, bearing: -24, zoom: Math.max(map.getZoom(), 16.9) } : { pitch: 0, bearing: 0, zoom: Math.min(map.getZoom(), 12.6) };
     if (instant) map.jumpTo(cam); else map.easeTo(Object.assign(cam, { duration: 1400 }));
+  }
+
+  // ------------------------------------------------------------------ bâtiments réels (photogrammétrie)
+  // Tuiles 3D photoréalistes de Google : la ville telle qu'elle a été photographiée. Il faut une clé d'API au nom de
+  // la personne qui consulte ; elle reste dans son navigateur et n'est envoyée qu'à Google, dans un en-tête.
+  const PHOTO_URL = 'https://tile.googleapis.com/v1/3dtiles/root.json', PHOTO_HOST = 'https://tile.googleapis.com/', PHOTO_STORE = 'qem-cle-google';
+  const photoKey = () => { try { return localStorage.getItem(PHOTO_STORE) || ''; } catch (e) { return ''; } };
+  const photoReady = () => !!(deck.Tile3DLayer && deck._TerrainExtension && deck.SimpleMeshLayer);
+  const photoFetch = (url, opt) => {
+    if (!String(url).startsWith(PHOTO_HOST)) return fetch(url, opt);
+    const run = state.photoRun;
+    return fetch(url, Object.assign({}, opt, { headers: Object.assign({}, opt && opt.headers, { 'X-GOOG-API-KEY': photoKey() }) })).then((r) => {
+      // clé refusée, API non activée ou quota atteint : on revient à la ville modélisée et on l'explique
+      const refus = r.status === 400 || r.status === 401 || r.status === 403 || r.status === 429;
+      // avant le premier affichage, tout échec (panne de Google, portail captif) ramène à la ville modélisée ;
+      // une fois la ville affichée, un quota dépassé un instant sur une tuile ne coupe pas le mode
+      if (!r.ok && (refus || !state.photoSeen) && !(r.status === 429 && state.photoSeen) && state.photo && run === state.photoRun) {
+        // un refus isolé après chargement vient le plus souvent d'une session expirée : on en redemande une, une seule fois
+        const renew = (r.status === 400 || r.status === 403) && state.photoSeen && performance.now() - (state.photoRenewAt || -1e9) > 120000;
+        // la raison précise du refus est dans la réponse de Google : on la lit sur une copie, sans toucher à l'originale
+        const why = renew ? Promise.resolve(null) : r.clone().json().then((j) => (j && j.error) || null, () => null);
+        why.then((err) => { if (!state.photo || run !== state.photoRun) return; if (!renew) { photoFail(refus ? r.status : 0, err); return; }
+          // la caméra garde sa visée : sans cela, elle plongerait puis bondirait pendant le rechargement
+          const z = map.transform.elevation || 0, at = state.photoAt, g = state.photoG;
+          state.photoRenewAt = performance.now(); setPhoto(false); setPhoto(true);
+          if (state.photo) { if (map.transform.setElevation) map.transform.setElevation(z); state.photoAt = at; state.photoG = g; state.photoHit = performance.now(); map.triggerRepaint(); }
+        });
+      }
+      return r;
+    }, (e) => { if (state.photo && run === state.photoRun && !state.photoSeen) setTimeout(() => photoFail(0), 0); throw e; });
+  };
+  const PHOTO_LOAD = { fetch: photoFetch };
+
+  /** Cause d'un refus, d'après la réponse de Google ('' si elle n'est pas reconnue). */
+  function photoWhy(err) {
+    if (!err) return '';
+    const text = typeof err.message === 'string' ? err.message : '';
+    const reasons = (Array.isArray(err.details) ? err.details : []).map((d) => (d && typeof d.reason === 'string' ? d.reason : '')).join(' ');
+    const all = reasons + ' ' + text;
+    if (/BILLING/i.test(all)) return 'La facturation n\'est pas activée sur le projet Google Cloud de cette clé : activez-la dans la console, puis réessayez.';
+    if (/SERVICE_DISABLED|has not been used|is disabled/i.test(all)) return '« Map Tiles API » n\'est pas activée dans le projet Google Cloud de cette clé : activez-la dans « API et services », attendez une minute, puis réessayez.';
+    if (/API_KEY_SERVICE_BLOCKED/i.test(all)) return 'Les restrictions d\'API de cette clé n\'autorisent pas « Map Tiles API » : ajoutez-la dans les restrictions de la clé.';
+    if (/REFERRER_BLOCKED|referer|referrer/i.test(all)) {
+      return /^https?:$/.test(location.protocol) && location.origin !== 'null'
+        ? 'Les restrictions de site de cette clé n\'autorisent pas ' + location.origin + ' : ajoutez ' + location.origin + '/* aux sites autorisés.'
+        : 'Cette clé est restreinte à des sites web : elle ne fonctionne pas depuis un fichier local ou un aperçu. Servez la page en http(s) et autorisez cette adresse, ou utilisez une clé sans restriction de site.';
+    }
+    if (/IP_ADDRESS_BLOCKED|ANDROID_APP_BLOCKED|IOS_APP_BLOCKED/i.test(all)) return 'Cette clé est restreinte à un autre type d\'application : choisissez la restriction « Sites web » (ou aucune) dans la console.';
+    if (/API_KEY_INVALID|API key not valid/i.test(all)) return 'Google ne reconnaît pas cette clé : recopiez-la en entier depuis « Identifiants » dans la console.';
+    return '';
+  }
+
+  function photoFail(status, err) {
+    if (!state.photo) return;
+    setPhoto(false); writeHash();
+    const raw = err && typeof err.message === 'string' && err.message ? ' Réponse de Google : « ' + err.message.slice(0, 300) + ' »' : '';
+    const msg = status === 429 ? 'Google signale que le quota de la clé est atteint. Réessayez plus tard ou vérifiez le quota dans la console Google Cloud.'
+      : status ? (photoWhy(err) || 'Google a refusé la clé (erreur ' + status + '). Vérifiez qu\'elle est exacte, que « Map Tiles API » est activée et que ses restrictions autorisent ce site.') + raw
+      : 'Les tuiles de Google sont injoignables (connexion, panne ou bloqueur de contenu). La ville modélisée reste affichée.';
+    // une saisie en cours (« Changer la clé ») n'est pas effacée
+    const dlg = $('dlg-photo');
+    if (!dlg.open) { $('photo-key').value = ''; if (dlg.showModal) dlg.showModal(); }
+    const again = photoKey() ? ' Pour réessayer avec la clé enregistrée, laissez le champ vide et validez.' : '';
+    $('photo-msg').textContent = ''; $('photo-msg').textContent = msg + again; // écrit une fois le dialogue ouvert, pour être annoncé
+  }
+
+  function photoLayer() {
+    return new deck.Tile3DLayer({
+      id: 'google-3d', data: PHOTO_URL, loadOptions: PHOTO_LOAD, operation: 'terrain+draw',
+      pickable: true, // pour lire l'altitude du relief sous le centre de l'écran (voir photoProbe)
+      onTilesetLoad: (tileset) => {
+        state.photoSeen = true;
+        // Le plafond d'origine (32 Mo) est bien trop bas pour une ville photographiée : les tuiles affichées seraient
+        // purgées en continu. Les tuiles qui ne font que renvoyer à un sous-arbre ne pèsent rien et ne se rechargent
+        // pas une fois purgées (le quartier resterait flou) : on les garde toujours.
+        // (plus bas sur téléphone et tablette, qui n'annoncent pas toujours leur mémoire)
+        const mem = navigator.deviceMemory, touch = !!(window.matchMedia && matchMedia('(pointer: coarse)').matches);
+        const cap = touch ? (mem >= 8 ? 512 : 256) : (mem || 8) >= 8 ? 1024 : 512;
+        tileset.maximumMemoryUsage = cap; tileset.options.maximumMemoryUsage = cap;
+        const cache = tileset._cache;
+        if (cache && cache.unloadTile && !cache.keepsTrees) {
+          const unload = cache.unloadTile.bind(cache);
+          // sans « done », c'est une destruction de tuile et non une purge : elle suit son cours
+          cache.unloadTile = (ts, tile, done) => { if (!done || !tile.hasTilesetContent) unload(ts, tile, done); };
+          cache.keepsTrees = true;
+        }
+        // Défaut du parcours d'origine : une tuile vide (rien à charger) qu'il est inutile d'affiner est comptée comme
+        // « pas encore chargée ». Sa voisine ne s'affine alors jamais et le quartier reste flou. On la compte chargée.
+        const trav = tileset._traverser;
+        if (trav && trav.executeEmptyTraversal && trav._emptyTraversalStack && !trav.skipsEmpty) {
+          trav.executeEmptyTraversal = function (root, frameState) {
+            let all = true;
+            const stack = this._emptyTraversalStack;
+            stack.push(root);
+            while (stack.length > 0) {
+              const t = stack.pop();
+              const go = !t.hasRenderContent && this.canTraverse(t, frameState), leaf = !t.hasRenderContent && t.children.length === 0;
+              if (!go && !t.contentAvailable && !leaf && !t.hasEmptyContent) all = false;
+              this.updateTile(t, frameState);
+              if (!t.isVisibleAndInRequestVolume) { this.loadTile(t, frameState); this.touchTile(t, frameState); }
+              if (go) for (const child of t.children) stack.push(child);
+            }
+            return root.hasEmptyContent || all;
+          };
+          trav.skipsEmpty = true;
+        }
+        // mention des sources exigée par Google : celles des tuiles affichées
+        tileset.options.onTraversalComplete = (tiles) => {
+          const seen = new Set();
+          for (const t of tiles) { const c = t.content && t.content.gltf && t.content.gltf.asset && t.content.gltf.asset.copyright; if (c) for (const part of String(c).split(';')) if (part.trim()) seen.add(part.trim()); }
+          const txt = [...seen].join(' · ');
+          if (txt !== state.photoCredits) { state.photoCredits = txt; $('photo-src').textContent = txt; }
+          const est = photoGround(tiles);
+          state.photoBest = est; state.photoDirty = performance.now();
+          return tiles;
+        };
+      },
+    });
+  }
+
+  /** Active ou coupe les bâtiments réels. Sans clé, sans vue 3D ou sans le moteur nécessaire, le mode reste coupé. */
+  /**
+   * Point bas de la tuile fine qui couvre le centre de la carte (null s'il n'y en a pas) : le niveau du sol,
+   * immeubles exclus. Chaque tuile est une boîte orientée.
+   */
+  function photoGround(tiles) {
+    const c = map.getCenter(), la = (c.lat * Math.PI) / 180, lo = (c.lng * Math.PI) / 180;
+    const up = [Math.cos(la) * Math.cos(lo), Math.cos(la) * Math.sin(lo), Math.sin(la)];
+    const E2 = 0.00669437999014, N = 6378137 / Math.sqrt(1 - E2 * up[2] * up[2]);
+    const p0 = [N * up[0], N * up[1], N * (1 - E2) * up[2]]; // le centre de la carte, au niveau de l'ellipsoïde
+    let best = null, bestSize = 3 * 300 * 300; // tuiles de moins de 600 m de côté environ
+    for (const t of tiles) {
+      const bv = t.boundingVolume, org = t.content && t.content.cartographicOrigin;
+      if (!bv || !bv.halfAxes || !bv.center || !org || !Number.isFinite(org[2])) continue;
+      const h = org[2], ax = bv.halfAxes, ctr = bv.center;
+      const dx = p0[0] + up[0] * h - ctr[0], dy = p0[1] + up[1] * h - ctr[1], dz = p0[2] + up[2] * h - ctr[2];
+      let inside = true, hz = 0, size = 0;
+      for (let i = 0; i < 3; i++) {
+        const a0 = ax[3 * i], a1 = ax[3 * i + 1], a2 = ax[3 * i + 2], l2 = a0 * a0 + a1 * a1 + a2 * a2;
+        if (Math.abs(dx * a0 + dy * a1 + dz * a2) > l2) inside = false;
+        hz += Math.abs(a0 * up[0] + a1 * up[1] + a2 * up[2]); size += l2;
+      }
+      if (inside && size < bestSize) { bestSize = size; best = h - hz; }
+    }
+    return best != null && best > -80 && best < 400 ? best : null;
+  }
+
+  // Altitude visée après un grand saut : au-dessus de tout le relief de la région, d'où l'on voit forcément le sol.
+  const PHOTO_SAFE = 160;
+
+  /**
+   * La caméra vise le sol réel : sans cela, elle passerait sous le relief en haute-ville (le sol y est une centaine
+   * de mètres plus haut qu'en basse-ville). On lit l'altitude du relief autour du centre de l'écran, plusieurs fois
+   * par seconde, et la visée la suit en douceur.
+   */
+  function photoProbe() {
+    if (!state.photo || !overlay || !overlay._deck || document.hidden) return;
+    const now = performance.now(), tick = (state.photoTick = (state.photoTick || 0) + 1);
+    // rien ne bouge et rien ne se charge : un contrôle par seconde suffit
+    if (!map.isMoving() && now - (state.photoDirty || 0) > 2000 && tick % 5) return;
+    const tr = map.transform, w = tr.width, h = tr.height, c = map.getCenter(), at = state.photoAt;
+    // un grand saut (lien, clic sur une station éloignée) : on repart d'en haut plutôt que de risquer d'arriver sous le sol
+    if (!at || Math.hypot((c.lng - at[0]) * TQ.geo.KX, (c.lat - at[1]) * TQ.geo.KY) > 400) { photoElev(PHOTO_SAFE, !at || !map.isMoving()); state.photoHit = now; } // d'un coup seulement pour un vrai saut
+    state.photoAt = [c.lng, c.lat];
+    const mpp = (40075016.686 * Math.cos((c.lat * Math.PI) / 180)) / (512 * Math.pow(2, map.getZoom()));
+    const camAlt = (tr.elevation || 0) + 1.5 * h * mpp * Math.cos((map.getPitch() * Math.PI) / 180);
+    let low = Infinity, near = Infinity, nearZ = NaN;
+    for (const [fx, fy] of [[0, 0], [-0.12, 0], [0.12, 0], [0, -0.12], [0, 0.12]]) {
+      let info = null;
+      try { info = overlay._deck.pickObject({ x: w * (0.5 + fx), y: h * (0.5 + fy), unproject3D: true, layerIds: ['google-3d'] }); } catch (err) { /* calque pas encore prêt */ }
+      const p = info && info.coordinate, z = p ? p[2] : NaN;
+      // un point plus haut que la caméra n'est pas le sol qu'elle survole
+      if (!(Number.isFinite(z) && z > -80 && z < camAlt - 3)) continue;
+      // seul le relief proche du centre compte : un point lu au loin (le pied du coteau) ferait osciller la visée
+      const d = Math.hypot((p[0] - c.lng) * TQ.geo.KX, (p[1] - c.lat) * TQ.geo.KY);
+      if (d <= 40) low = Math.min(low, z);
+      if (d < near) { near = d; nearZ = z; }
+    }
+    if (low === Infinity && Number.isFinite(nearZ)) low = nearZ; // visée encore trop haute ou trop basse : le point le plus proche guide
+    if (low === Infinity) { if (now - (state.photoHit || 0) > 1200) photoElev(PHOTO_SAFE); return; } // rien en vue : on prend de la hauteur
+    state.photoHit = now;
+    // le point bas de la tuile sous le centre évite de monter sur les toits ; le relief lu à l'écran le borne
+    const b = state.photoBest, g = b == null ? low : Math.min(low, Math.max(b, low - 30));
+    if (state.photoG == null || Math.abs(g - state.photoG) > 2.5) photoElev(g);
+  }
+
+  /** Réglage de l'altitude visée : progressif, ou immédiat après un saut. */
+  function photoElev(target, now) {
+    const set = (z) => { const tr = map.transform; if (tr.setElevation) tr.setElevation(z); else map.jumpTo({ elevation: z }); map.triggerRepaint(); };
+    state.photoG = target;
+    if (now) { set(target); return; }
+    if (state.photoRaf) return;
+    const step = () => {
+      state.photoRaf = 0;
+      if (!state.photo) return;
+      const cur = map.transform.elevation || 0, d = state.photoG - cur;
+      if (Math.abs(d) < 0.3) return;
+      set(Math.abs(d) < 1 ? state.photoG : cur + d * 0.14);
+      state.photoRaf = requestAnimationFrame(step);
+    };
+    state.photoRaf = requestAnimationFrame(step);
+  }
+
+  function setPhoto(on) {
+    on = !!on && state.view3d && !!photoKey() && photoReady();
+    if (on !== !!state.photo) {
+      // Le calque ne suit l'altitude visée par la carte que si celle-ci annonce un relief : on l'annonce le temps du mode.
+      if (!state.terrain0) state.terrain0 = map.getTerrain;
+      map.getTerrain = on ? () => state.terrain0.call(map) || { source: 'google-3d' } : state.terrain0;
+      if (map.setCenterClampedToGround) map.setCenterClampedToGround(!on);
+      if (!on && map.transform.setElevation) { map.transform.setElevation(0); map.triggerRepaint(); }
+      state.photo = on; state.photoRun = (state.photoRun || 0) + 1; state.photoSeen = false; state.photoCredits = '';
+      state.photoAt = null; state.photoG = null; state.photoBest = null; state.photoHit = 0;
+      clearInterval(state.photoTimer); state.photoTimer = on ? setInterval(photoProbe, 200) : 0;
+      // rien d'affiché après 20 s (réponse illisible d'un proxy, panne) : on n'attend pas indéfiniment devant une ville vide
+      clearTimeout(state.photoGuard); const run = state.photoRun;
+      state.photoGuard = on ? setTimeout(() => { if (state.photo && run === state.photoRun && !state.photoSeen) photoFail(0); }, 20000) : 0;
+      // la ville photographiée a son propre relief : elle est dessinée par-dessus la carte, avec sa propre profondeur
+      // le calque de la ville photographiée a son propre contexte graphique : on le libère en le quittant
+      // (jamais celui du calque ordinaire, qui est le contexte de la carte elle-même)
+      const dev = !on && overlay._deck ? overlay._deck.device : null;
+      map.removeControl(overlay);
+      try { if (dev && dev.loseDevice) dev.loseDevice(); } catch (err) { /* contexte déjà perdu */ }
+      // Les hauteurs de Google sont mesurées depuis l'ellipsoïde : en basse-ville, le sol réel passe sous le plan de la
+      // carte. On voit donc plus loin que prévu, sinon le fond de la vue serait coupé.
+      const far = on && deck.MapView ? { views: new deck.MapView({ id: 'mapbox', farZMultiplier: 4 }) } : {};
+      overlay = new deck.MapboxOverlay(Object.assign({ interleaved: !on, layers: [], getTooltip: tooltip }, far));
+      map.addControl(overlay);
+      map.setMaxZoom(on ? 17.6 : 18.5); // de plus près, la caméra entrerait dans les immeubles de la haute-ville
+    }
+    document.body.classList.toggle('photo', on);
+    $('photo').setAttribute('aria-pressed', String(on));
+    $('photo-credits').hidden = !on; $('photo-src').textContent = state.photoCredits || '';
+  }
+
+  function initPhoto() {
+    const dlg = $('dlg-photo'), open = () => { $('photo-msg').textContent = photoKey() ? 'Une clé est déjà enregistrée dans ce navigateur.' : ''; $('photo-key').value = ''; dlg.showModal(); };
+    if (!photoReady()) { $('photo').hidden = true; return; }
+    // « Changer la clé » disparaît avec le mode : le focus revient alors au bouton toujours visible
+    dlg.addEventListener('close', () => { if ($('photo-credits').hidden && state.view3d) $('photo').focus(); });
+    $('photo').addEventListener('click', () => {
+      if (state.photo) setPhoto(false); else if (photoKey()) setPhoto(true); else { open(); return; }
+      writeHash();
+    });
+    $('photo-edit').addEventListener('click', open);
+    $('photo-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const k = $('photo-key').value.trim();
+      // champ vide, clé déjà enregistrée, mode éteint : c'est un nouvel essai
+      if (!k && photoKey() && !state.photo) { dlg.close(); setPhoto(true); writeHash(); return; }
+      if (!/^[A-Za-z0-9_-]{20,}$/.test(k)) { $('photo-msg').textContent = k ? 'Cette clé n\'a pas la forme attendue (une suite de lettres, chiffres, tirets, sans espace).' : 'Collez votre clé dans le champ.'; return; }
+      try { localStorage.setItem(PHOTO_STORE, k); } catch (err) { $('photo-msg').textContent = 'Ce navigateur refuse d\'enregistrer la clé (stockage local désactivé).'; return; }
+      $('photo-key').value = ''; dlg.close();
+      if (state.photo) { setPhoto(false); } // nouvelle clé : on recharge les tuiles
+      setPhoto(true); writeHash();
+    });
+    $('photo-clear').addEventListener('click', () => {
+      try { localStorage.removeItem(PHOTO_STORE); } catch (err) { /* stockage indisponible */ }
+      setPhoto(false); writeHash();
+      $('photo-key').value = ''; $('photo-msg').textContent = 'Clé effacée de ce navigateur.';
+    });
+  }
+
+  // ------------------------------------------------------------------ arbres
+  /** Surface de révolution autour de l'axe vertical : profil [rayon, hauteur] du bas vers le haut. */
+  const lathe = (profile, n) => {
+    const pos = [], nor = [];
+    for (let i = 0; i < profile.length - 1; i++) {
+      const [r0, z0] = profile[i], [r1, z1] = profile[i + 1], dz = z1 - z0, dr = r1 - r0, l = Math.hypot(dz, dr) || 1;
+      for (let j = 0; j < n; j++) {
+        const a = (j / n) * 2 * Math.PI, b = ((j + 1) / n) * 2 * Math.PI, m = (a + b) / 2;
+        const A = [r0 * Math.cos(a), r0 * Math.sin(a), z0], B = [r0 * Math.cos(b), r0 * Math.sin(b), z0], C = [r1 * Math.cos(b), r1 * Math.sin(b), z1], D = [r1 * Math.cos(a), r1 * Math.sin(a), z1];
+        const nn = [(dz / l) * Math.cos(m), (dz / l) * Math.sin(m), -dr / l]; // facettes franches, comme un arbre de maquette
+        for (const v of [A, B, C, A, C, D]) { pos.push(...v); nor.push(...nn); }
+      }
+    }
+    return { attributes: { positions: { value: new Float32Array(pos), size: 3 }, normals: { value: new Float32Array(nor), size: 3 }, texCoords: { value: new Float32Array((pos.length / 3) * 2), size: 2 } } };
+  };
+  const TREE = {
+    crown: lathe([[0, 0], [0.34, 0.12], [0.5, 0.42], [0.42, 0.74], [0.2, 0.94], [0, 1]], 7),
+    fir: lathe([[0, 0], [0.5, 0.02], [0.3, 0.4], [0.36, 0.42], [0.16, 0.74], [0.2, 0.76], [0, 1]], 7),
+    trunk: lathe([[0.5, 0], [0.4, 1]], 5),
+  };
+  const GREENS = [[70, 128, 62], [88, 146, 70], [60, 112, 58], [104, 152, 76], [78, 136, 84]];
+  const inRing = (x, y, ring) => { let c = false; for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) { const a = ring[i], b = ring[j]; if ((a[1] > y) !== (b[1] > y) && x < ((b[0] - a[0]) * (y - a[1])) / (b[1] - a[1]) + a[0]) c = !c; } return c; };
+  const inPoly = (x, y, rings) => { let c = false; for (const r of rings) if (inRing(x, y, r)) c = !c; return c; };
+  const polysOf = (f) => (f.geometry.type === 'Polygon' ? [f.geometry.coordinates] : f.geometry.type === 'MultiPolygon' ? f.geometry.coordinates : []);
+  const boxOf = (rings) => { let x0 = 180, y0 = 90, x1 = -180, y1 = -90; for (const c of rings[0]) { if (c[0] < x0) x0 = c[0]; if (c[0] > x1) x1 = c[0]; if (c[1] < y0) y0 = c[1]; if (c[1] > y1) y1 = c[1]; } return [x0, y0, x1, y1]; };
+
+  /**
+   * Plante les arbres visibles : serrés dans les boisés, clairsemés dans les parcs, d'après les polygones du fond de
+   * carte. La grille est fixe sur le territoire : un arbre ne change pas de place quand la vue bouge.
+   */
+  function plantTrees() {
+    const zoom = map.getZoom(), bb = map.getBounds(), ctr = map.getCenter();
+    // zone plantée : un rectangle fixe autour du centre de la vue (arrondi), replanté seulement quand la vue s'éloigne
+    const cx = Math.round(ctr.lng / 0.004) * 0.004, cy = Math.round(ctr.lat / 0.003) * 0.003;
+    const key = [zoom < 15.3 ? 0 : 1, cx.toFixed(3), cy.toFixed(3), map.areTilesLoaded() ? 1 : 0].join('|');
+    if (state.treeKey === key) return;
+    state.treeKey = key;
+    if (zoom < 15.3 || !map.getSource('openmaptiles')) { state.trees = []; return; }
+    const W = Math.max(bb.getWest(), cx - 0.022), S = Math.max(bb.getSouth(), cy - 0.015), E = Math.min(bb.getEast(), cx + 0.022), N = Math.min(bb.getNorth(), cy + 0.015), KX = TQ.geo.KX, KY = TQ.geo.KY;
+    const q = (layer) => { try { return map.querySourceFeatures('openmaptiles', { sourceLayer: layer }); } catch (e) { return []; } };
+    // ni dans l'eau, ni dans un bâtiment : obstacles rangés dans une grille d'environ 80 m pour ne tester que les voisins
+    const CELL = 0.001, grid = new Map(), cellOf = (x, y) => Math.floor(x / CELL) * 100000 + Math.floor(y / CELL);
+    for (const layer of ['water', 'building']) for (const f of q(layer)) for (const rings of polysOf(f)) {
+      const b = boxOf(rings);
+      if (b[2] < W || b[0] > E || b[3] < S || b[1] > N) continue;
+      const item = [b, rings];
+      for (let gx = Math.floor(Math.max(b[0], W) / CELL); gx <= Math.floor(Math.min(b[2], E) / CELL); gx++) for (let gy = Math.floor(Math.max(b[1], S) / CELL); gy <= Math.floor(Math.min(b[3], N) / CELL); gy++) {
+        const k = gx * 100000 + gy; let cell = grid.get(k);
+        if (!cell) grid.set(k, (cell = []));
+        cell.push(item);
+      }
+    }
+    const trees = [], seen = new Set();
+    const plant = (rings, step, wood) => {
+      const b = boxOf(rings), x0 = Math.max(b[0], W), x1 = Math.min(b[2], E), y0 = Math.max(b[1], S), y1 = Math.min(b[3], N);
+      if (x0 > x1 || y0 > y1) return;
+      const dx = step / KX, dy = step / KY;
+      for (let ix = Math.floor(x0 / dx); ix <= Math.ceil(x1 / dx) && trees.length < 7000; ix++) for (let iy = Math.floor(y0 / dy); iy <= Math.ceil(y1 / dy); iy++) {
+        const h = (Math.imul(ix, 73856093) ^ Math.imul(iy, 19349663)) >>> 0, h2 = Math.imul(h, 2654435761) >>> 0, h3 = Math.imul(h2, 2246822519) >>> 0;
+        if (!wood && h3 % 100 < 35) continue; // des clairières dans les parcs
+        const x = (ix + 0.15 + 0.7 * (h / 4294967296)) * dx, y = (iy + 0.15 + 0.7 * (h2 / 4294967296)) * dy, k = step + ':' + ix + ':' + iy;
+        if (x < W || x > E || y < S || y > N || seen.has(k) || !inPoly(x, y, rings)) continue;
+        let free = true;
+        for (const [bx, br] of grid.get(cellOf(x, y)) || []) if (x >= bx[0] && x <= bx[2] && y >= bx[1] && y <= bx[3] && inPoly(x, y, br)) { free = false; break; }
+        if (!free) continue;
+        seen.add(k);
+        const t = (h3 % 1000) / 1000, height = 6.5 + 6 * t, fir = wood && h3 % 4 === 0;
+        trees.push({ p: [x, y, 0], top: [x, y, height * 0.28], crown: fir ? [height * 0.42, height * 0.42, height * 0.78] : [height * 0.62, height * 0.62, height * 0.74], trunk: [0.5, 0.5, height * 0.34], fir, color: GREENS[h2 % GREENS.length], yaw: h % 360 });
+      }
+    };
+    const jobs = [];
+    for (const f of q('landcover')) {
+      const c = f.properties.class, sub = f.properties.subclass;
+      if (c === 'wood') for (const rings of polysOf(f)) jobs.push([rings, 9, true]);
+      else if (c === 'grass' && (sub === 'park' || sub === 'garden' || sub === 'village_green' || sub === 'recreation_ground')) for (const rings of polysOf(f)) jobs.push([rings, 19, false]);
+    }
+    for (const f of q('park')) for (const rings of polysOf(f)) jobs.push([rings, 19, false]);
+    // le plafond d'arbres profite d'abord aux espaces verts les plus proches du centre de la vue
+    const far = (rings) => { const b = boxOf(rings), dx = (Math.min(Math.max(ctr.lng, b[0]), b[2]) - ctr.lng) * KX, dy = (Math.min(Math.max(ctr.lat, b[1]), b[3]) - ctr.lat) * KY; return dx * dx + dy * dy; };
+    for (const j of jobs) j.push(far(j[0]));
+    jobs.sort((a, b) => a[3] - b[3]);
+    for (const [rings, step, wood] of jobs) { if (trees.length >= 7000) break; plant(rings, step, wood); }
+    state.trees = trees; state.leafy = trees.filter((t) => !t.fir); state.firs = trees.filter((t) => t.fir);
+  }
+
+  function treeLayers() {
+    const mat = { ambient: 0.55, diffuse: 0.6, shininess: 4, specularColor: [20, 20, 20] };
+    const crown = (id, data, mesh) => new deck.SimpleMeshLayer({ id, data, mesh, getPosition: (d) => d.top, getScale: (d) => d.crown, getOrientation: (d) => [0, d.yaw, 0], getColor: (d) => d.color, material: mat });
+    return [
+      new deck.SimpleMeshLayer({ id: 'tree-trunks', data: state.trees, mesh: TREE.trunk, getPosition: (d) => d.p, getScale: (d) => d.trunk, getColor: [96, 74, 56], material: mat }),
+      crown('tree-crowns', state.leafy, TREE.crown), crown('tree-firs', state.firs, TREE.fir),
+    ];
+  }
+
+  const EXT = {};
+  function initExt() { if (!EXT.terrain && deck._TerrainExtension) EXT.terrain = new deck._TerrainExtension(); if (!EXT.dash && deck.PathStyleExtension) { EXT.dash = new deck.PathStyleExtension({ dash: true }); EXT.offset = new deck.PathStyleExtension({ offset: true }); EXT.dashOffset = new deck.PathStyleExtension({ dash: true, offset: true }); } }
+
+  /**
+   * Géométrie du sol : marquages, dalles de carrefour, passages piétons et lignes d'arrêt, déduits des voies de
+   * chaque tronçon. Recalculée seulement quand l'échelle de la scène ou la voie réservée change.
+   */
+  function buildGround(net, big, block, LANE, STRIP, reserved) {
+    initExt();
+    const fast = (e) => { const c = net.ecls[e]; return c === 0 || c === 1 || c === 5; };
+    const N = net.N, deg = new Uint8Array(N), R = new Float32Array(N), ext = new Float32Array(net.E), stopAt = new Float32Array(net.E), calm = new Uint8Array(N);
+    const seen = new Uint8Array(roadData.length);
+    for (let e = 0; e < net.E; e++) {
+      const [x0, , W] = block(e); ext[e] = Math.max(Math.abs(x0), Math.abs(x0 + W));
+      const a = net.ea[e], b = net.eb[e];
+      if (ext[e] > R[a]) R[a] = ext[e]; if (ext[e] > R[b]) R[b] = ext[e];
+      if (!fast(e)) { calm[a] = 1; calm[b] = 1; }
+      if (!seen[net.eseg[e]]) { seen[net.eseg[e]] = 1; if (deg[a] < 250) deg[a]++; if (deg[b] < 250) deg[b]++; }
+    }
+    const solid = [], dash = [], zebra = [], stop = [], nodes = [], p = [0, 0, 0], q = [0, 0, 0];
+    const across = (e, at, lo, hi, list) => { net.edgePosLane(e, at, lo, p, 0); net.edgePosLane(e, at, hi, q, 0); list.push({ path: [[p[0], p[1], 0.1], [q[0], q[1], 0.1]] }); };
+    for (const r of roadData) {
+      const e0 = r.edges[0], central = reserved && r.cor && Math.abs(state.corLat[e0]) < STRIP + 0.3 * big;
+      // double ligne jaune dans l'axe des rues à double sens (sauf si l'emprise réservée occupe l'axe)
+      if (r.two && !central) for (const off of [-0.16 * big, 0.16 * big]) solid.push({ path: r.path3, off, yellow: true });
+      for (const e of r.edges) {
+        const [x0, k, W] = block(e), sg = net.erev[e] ? -1 : 1, len = net.elen[e], a = net.ea[e], b = net.eb[e];
+        for (let j = 1; j < k; j++) dash.push({ path: r.path3, off: sg * (x0 + j * LANE) });
+        if (fast(e)) { solid.push({ path: r.path3, off: sg * (x0 + W - 0.25 * big) }); if (!r.two) solid.push({ path: r.path3, off: sg * (x0 + 0.25 * big), yellow: true }); continue; }
+        if (len < R[a] + R[b] + 18 * big) continue;
+        const lo = r.two ? -ext[e] : x0, hi = x0 + W;
+        if (deg[b] >= 3) {
+          const at = len - R[b] - 2 * big;
+          across(e, at, lo, hi, zebra);
+          // sans feux (autos coordonnées), personne ne s'arrête : pas de ligne d'arrêt
+          if (!net.cond.auto) { stopAt[e] = len - at + 2.6 * big; across(e, len - stopAt[e], x0, hi, stop); }
+        }
+        if (!r.two && deg[a] >= 3) across(e, R[a] + 2 * big, lo, hi, zebra);
+      }
+    }
+    const nd = net.data.nodes;
+    for (let n = 0; n < N; n++) if (deg[n] >= 3 && R[n] > 0 && calm[n]) nodes.push({ pos: [nd[n][0], nd[n][1], 0.08], r: R[n] });
+    return { solid, dash, zebra, stop, nodes, stopAt };
   }
 
   /** Direction (degrés, sens trigonométrique depuis l'est) d'un véhicule sur l'arête e à la fraction f. */
@@ -273,7 +738,7 @@
     // Échelle de la scène : en vue rapprochée tout est à taille réelle ; plus loin, chaussées et véhicules
     // grossissent ensemble, pour que les véhicules restent toujours sur leur voie.
     const zoom = map.getZoom();
-    const big = Math.min(2.4, Math.max(1, Math.pow(2, 17 - zoom)));
+    const big = Math.round(Math.min(2.4, Math.max(1, Math.pow(2, 17 - zoom))) * 10) / 10;
     const LANE = 3.5 * big, AXIS = 0.3 * big; // largeur d'une voie ; demi-terre-plein entre les deux sens
     const reserved = net.cond.laneDrop; // une voie du tracé est prise par le tramway, les bus ou les Cybercab
     const STRIP = AXIS + LANE; // demi-largeur de l'emprise réservée : une voie par sens
@@ -291,90 +756,206 @@
     };
     const widthOf = (d) => { let ext = 0; for (const ed of d.edges) { const [x0, , W] = block(ed); ext = Math.max(ext, Math.abs(x0), Math.abs(x0 + W)); } return 2 * ext + 0.8 * big; };
     const under = state.labelLayer && map.getLayer(state.labelLayer) ? state.labelLayer : undefined; // sous les noms de rues
+    const gkey = big + '|' + reserved + '|' + !!net.cond.auto;
+    if (state.groundKey !== gkey) { state.groundKey = gkey; state.ground = buildGround(net, big, block, LANE, STRIP, reserved); }
+    const G = state.ground, detail = zoom >= 15.3;
+    // bâtiments réels : la ville photographiée remplace le sol et les volumes dessinés ; tout le reste se pose sur son relief
+    const photo = !!state.photo && !!EXT.terrain, TER = photo ? [EXT.terrain] : [];
+    const ASPHALT = [72, 76, 82, 255], WHITE = [236, 236, 230, 255], YELLOW = [232, 190, 70, 255];
+    // Le sol est peint à plat, couche après couche, juste avant les bâtiments du fond de carte : ceux-ci le recouvrent.
+    const ground = map.getLayer('building-3d') ? 'building-3d' : under, NOZ = { depthTest: false, depthCompare: 'always', depthWriteEnabled: false };
+    const flat = (id, data, props) => new deck.PathLayer(Object.assign({ id, data, getPath: (d) => d.path, widthUnits: 'meters', updateTriggers: { getWidth: [gkey], getOffset: [gkey], getColor: [gkey, lineKey] } }, photo ? { extensions: TER, terrainDrawMode: 'drape', opacity: 0.82 } : { beforeId: ground, parameters: NOZ }, props));
+    if (photo) layers.push(photoLayer()); else {
+    // trottoirs (ou accotements des autoroutes), bordure claire, puis chaussée
+    layers.push(flat('sidewalk', roadData, { getColor: (d) => (d.fast ? [108, 112, 118, 255] : [188, 186, 178, 255]), getWidth: (d) => widthOf(d) + (d.fast ? 1.6 : 5) * big, widthMinPixels: 2, capRounded: true, jointRounded: true }));
+    layers.push(flat('curb', state.streets, { getColor: [224, 222, 214, 255], getWidth: (d) => widthOf(d) + 0.5 * big, capRounded: true, jointRounded: true }));
     layers.push(new deck.PathLayer({
-      id: 'asphalt', data: roadData, getPath: (d) => d.path, beforeId: under,
+      id: 'asphalt', data: roadData, getPath: (d) => d.path, beforeId: ground, parameters: NOZ,
       // l'asphalte se réchauffe légèrement quand la rue se charge ; ce sont les files d'autos qui montrent la congestion
-      getColor: (d) => { const r = state.layers.roads ? state.segRatio[d.i] : 0; return r < 0.7 ? [86, 92, 100, 255] : r < 0.9 ? [104, 96, 88, 255] : r < 1 ? [116, 92, 84, 255] : [126, 84, 82, 255]; },
+      getColor: (d) => { const r = state.layers.roads ? state.segRatio[d.i] : 0; return r < 0.7 ? ASPHALT : r < 0.9 ? [80, 78, 78, 255] : r < 1 ? [88, 79, 76, 255] : [96, 78, 74, 255]; },
       getWidth: widthOf, widthUnits: 'meters', widthMinPixels: 1.5, capRounded: true, jointRounded: true, pickable: true,
-      updateTriggers: { getColor: [state.colorTick, state.layers.roads], getWidth: [big, reserved] }, getPolygonOffset: () => [0, -200],
+      updateTriggers: { getColor: [state.colorTick, state.layers.roads], getWidth: [gkey] },
     }));
-    // ligne médiane des rues à double sens
-    layers.push(new deck.PathLayer({
-      id: 'median', data: state.twoWay, getPath: (d) => d.path3, beforeId: under, getColor: [236, 200, 90, 230],
-      getWidth: 0.22 * big, widthUnits: 'meters', widthMinPixels: 0.6, getPolygonOffset: () => [0, -600], updateTriggers: { getWidth: [big] },
-    }));
-    // l'emprise réservée : deux voies au centre de la rue, une par sens
-    layers.push(new deck.PathLayer({
-      id: 'line3d', data: lineParts.filter((d) => !tun(d)), getPath: (d) => d.path3, beforeId: under, getColor: lit ? [...lineColor.map((c) => Math.round(c * 0.55 + 40)), 255] : [104, 110, 118, 255],
-      getWidth: 2 * STRIP - 0.5 * big, widthUnits: 'meters', widthMinPixels: 2, capRounded: true, jointRounded: true, updateTriggers: { getColor: [lineKey], getWidth: [big] }, getPolygonOffset: () => [0, -1000],
-    }));
-    if (!deck.SimpleMeshLayer || zoom < 14.6) return layers.concat(stationLayers3d(lineColor, lineKey));
+    if (detail) {
+      // marquages : lignes continues (axe jaune, rives d'autoroute), tirets blancs entre les voies
+      layers.push(flat('marks-solid', G.solid, { getColor: (d) => (d.yellow ? YELLOW : WHITE), getWidth: 0.16 * big, getOffset: (d) => d.off / (0.16 * big), extensions: [EXT.offset] }));
+      layers.push(flat('marks-dash', G.dash, { getColor: WHITE, getWidth: 0.16 * big, getOffset: (d) => d.off / (0.16 * big), getDashArray: [20, 40], extensions: [EXT.dashOffset] }));
+      // carrefours : une dalle d'asphalte nu, puis passages piétons et lignes d'arrêt
+      layers.push(new deck.ScatterplotLayer({ id: 'junctions', data: G.nodes, beforeId: ground, parameters: NOZ, getPosition: (d) => d.pos, getRadius: (d) => d.r, radiusUnits: 'meters', getFillColor: ASPHALT, updateTriggers: { getRadius: [gkey] } }));
+      layers.push(flat('zebra', G.zebra, { getColor: WHITE, getWidth: 3 * big, getDashArray: [0.17, 0.17], extensions: [EXT.dash] }));
+      layers.push(flat('stop-lines', G.stop, { getColor: WHITE, getWidth: 0.4 * big }));
+    }
+    }
+    if (reserved) {
+      // l'emprise réservée : plateforme du tramway avec ses rails, ou chaussée teintée des bus et des Cybercab
+      const kind = L ? L.kind : 'cablane';
+      if (state.stripKey !== kind) { state.stripKey = kind; state.strip = lineParts.filter((d) => !tun(d)); }
+      const strip = state.strip;
+      const surface = kind === 'tram' ? [164, 160, 150, 255] : kind === 'bus' ? [150, 92, 84, 255] : [136, 114, 66, 255];
+      layers.push(flat('line3d', strip, { getPath: (d) => d.path3, getColor: surface, getWidth: 2 * STRIP - 0.5 * big, widthMinPixels: 2, capRounded: true, jointRounded: true }));
+      if (detail && !photo) {
+        const c = AXIS + LANE / 2, g = 0.72 * big, w = 0.14 * big, rim = STRIP - 0.45 * big;
+        const lines = kind === 'tram' ? [c - g, c + g, -c - g, -c + g].map((off) => ({ off, color: [56, 58, 62, 255] })).concat([rim, -rim].map((off) => ({ off, color: [...lineColor, 255] })))
+          : [rim, -rim].map((off) => ({ off, color: WHITE })).concat([0.14 * big, -0.14 * big].map((off) => ({ off, color: YELLOW })));
+        lines.forEach((ln, q) => layers.push(flat('line3d-mark' + q, strip, { getPath: (d) => d.path4, getColor: ln.color, getWidth: w, getOffset: ln.off / w, extensions: [EXT.offset] })));
+      }
+    }
+    if (detail && !photo && state.trees && state.trees.length && deck.SimpleMeshLayer) layers.push(...treeLayers());
+    if (!deck.SimpleMeshLayer || zoom < 14.6) return layers.concat(stationLayers3d(lineColor, lineKey, TER));
     // Le moteur ne suit pas chaque auto au mètre près : pour l'affichage, les véhicules d'un même tronçon sont rangés
     // en files, voie par voie, sans jamais se chevaucher. Ceux qui n'ont plus de place ne sont pas dessinés.
     const bb = map.getBounds(), w = bb.getWest(), e = bb.getEast(), s = bb.getSouth(), n = bb.getNorth();
-    const carLen = 4.5 * big, gap = carLen + 2.4 * big, box = state.ebox, byEdge = state.byEdge;
+    const carLen = 4.5 * big, gap = carLen + 2.4 * big, box = state.ebox, byEdge = state.byEdge, padX = (24 * gap) / TQ.geo.KX, padY = (24 * gap) / TQ.geo.KY;
     byEdge.clear();
     for (let i = 0; i < net.vn; i++) {
       const type = net.vType[i];
       if (type === 0 && !state.layers.cars) continue;
       const ed = net.vEdge[i], q = ed * 4;
-      if (box[q + 2] < w || box[q] > e || box[q + 3] < s || box[q + 1] > n) continue;
+      // marge : les suiveurs d'un groupe roulent encore à l'écran quand sa tête vient d'en sortir
+      if (box[q + 2] < w - padX || box[q] > e + padX || box[q + 3] < s - padY || box[q + 1] > n + padY) continue;
       let list = byEdge.get(ed);
       if (!list) byEdge.set(ed, (list = []));
       list.push(i);
     }
     const cars = [], cabs = [], out = [0, 0, 0];
-    const lp = [0, 0], lq = [0, 0];
+    const lp = [0, 0], lq = [0, 0], pa = [0, 0, 0], pb = [0, 0, 0], pm = [0, 0, 0];
+    const KX = TQ.geo.KX, KY = TQ.geo.KY, TURN = 8 * big, FADE = 10 * big;
+    const lateralOf = (ed, k) => { const b = block(ed); return b[0] + LANE * ((k % b[1]) + 0.5); };
+    // Pose d'une auto à `at` mètres du début du tronçon ed. Près d'un carrefour, elle suit une courbe qui relie sa voie
+    // sur le tronçon quitté (prev) ou à venir (next) : elle tourne au lieu de sauter d'une rue à l'autre.
+    const place = (ed, at, k, prev, next) => {
+      const len = net.elen[ed];
+      let A = -1, B = -1, u = 0;
+      if (prev >= 0 && at < TURN) { A = prev; B = ed; u = at; } else if (next >= 0 && at > len - TURN) { A = ed; B = next; u = at - len; }
+      const la = A < 0 ? 0 : net.elen[A], r = A < 0 ? 0 : Math.min(TURN, la * 0.45, net.elen[B] * 0.45);
+      if (A < 0 || r < 0.5 || u <= -r || u >= r) { net.edgePosLane(ed, Math.min(len, Math.max(0, at)), lateralOf(ed, k), out, 0); return; }
+      const latA = lateralOf(A, k), latB = lateralOf(B, k);
+      net.edgePosLane(A, la - r, latA, pa, 0); net.edgePosLane(B, r, latB, pb, 0);
+      // point de contrôle : là où se croisent la trajectoire d'arrivée et celle de départ (à défaut, entre les deux)
+      const ax = pa[0] * KX, ay = pa[1] * KY, bx = pb[0] * KX, by = pb[1] * KY;
+      const ca = Math.cos((pa[2] * Math.PI) / 180), sa = Math.sin((pa[2] * Math.PI) / 180), cb = Math.cos((pb[2] * Math.PI) / 180), sb = Math.sin((pb[2] * Math.PI) / 180);
+      const den = ca * sb - sa * cb;
+      let mx = (ax + bx) / 2, my = (ay + by) / 2;
+      if (Math.abs(den) > 0.2) { const ta = ((bx - ax) * sb - (by - ay) * cb) / den; if (ta > 0 && ta < 4 * r) { mx = ax + ca * ta; my = ay + sa * ta; } }
+      const t = (u + r) / (2 * r), w0 = (1 - t) * (1 - t), w1 = 2 * t * (1 - t), w2 = t * t;
+      out[0] = (w0 * ax + w1 * mx + w2 * bx) / KX; out[1] = (w0 * ay + w1 * my + w2 * by) / KY;
+      const tx = (1 - t) * (mx - ax) + t * (bx - mx), ty = (1 - t) * (my - ay) + t * (by - my);
+      out[2] = Math.abs(tx) + Math.abs(ty) > 1e-6 ? (Math.atan2(ty, tx) * 180) / Math.PI : pb[2];
+    };
+    // Mémoire d'affichage : chaque auto garde d'une image à l'autre sa dernière position, pour ne jamais sauter ni
+    // s'effacer en pleine rue. Elle est vidée quand la journée repart ou saute dans le temps.
+    const mem = state.carMem || (state.carMem = new Map()), frame = (state.frame3 = (state.frame3 || 0) + 1);
+    const dT = state.t3 == null ? 0 : sim.t - state.t3; state.t3 = sim.t;
+    if (dT < 0 || dT > 30 || state.resets3 !== sim.resets) mem.clear();
+    state.resets3 = sim.resets;
+    const simDt = dT < 0 || dT > 30 ? 0 : dT, smooth = simDt < 2, jumpMin = 2.5 + 45 * simDt;
+    const show = (key, type, paint, sc, yaw, x, y) => {
+      if (x < w || x > e || y < s || y > n) return;
+      const v = { p: [x, y, 0], yaw, i: key, type, sc, paint };
+      if (type === 0) { if (cars.length < 14000) cars.push(v); } else if (cabs.length < 9000) cabs.push(v);
+    };
+    // rt : tronçons qu'il lui reste à parcourir quand son groupe est sur le point d'arriver (null sinon) ; spd : m par seconde simulée
+    const HIST = [net.vPrev, net.vPrev2, net.vPrev3, net.vPrev4];
+    const emit = (key, type, paint, sc, ed, at, k, prev, next, rt, spd) => {
+      place(ed, at, k, prev, next);
+      let x = out[0], y = out[1], m = mem.get(key);
+      if (!m) mem.set(key, (m = { x, y, ox: 0, oy: 0 }));
+      else if (smooth) {
+        // un écart brusque (la file se réordonne, une auto change de tronçon) est rattrapé en douceur
+        const jx = (x - m.x) * KX, jy = (y - m.y) * KY, j = Math.hypot(jx, jy);
+        if (j > 60 * big) { m.ox = 0; m.oy = 0; } else if (j > jumpMin) { m.ox -= jx; m.oy -= jy; }
+        m.ox *= 0.88; m.oy *= 0.88; m.x = x; m.y = y;
+        x += m.ox / KX; y += m.oy / KY;
+      } else { m.x = x; m.y = y; m.ox = 0; m.oy = 0; }
+      m.f = frame; m.ed = ed; m.at = at; m.k = k; m.prev = prev; m.rt = rt; m.spd = spd; m.type = type; m.paint = paint; m.age = 0;
+      show(key, type, paint, sc, out[2], x, y);
+    };
     for (const [ed, list] of byEdge) {
-      const len = net.elen[ed], onLine = reserved && net.ecor[ed] === 1;
+      const len = net.elen[ed], onLine = reserved && net.ecor[ed] === 1, endNode = net.eb[ed];
       const [x0, carLanes, W] = block(ed);
-      const lateral = (k) => x0 + LANE * (k + 0.5);
-      // les carrefours restent dégagés : personne ne s'arrête dans les derniers mètres d'un tronçon
-      const clear = Math.min(len * 0.25, Math.max(Math.abs(x0), Math.abs(x0 + W)) + carLen * 0.5), end = len - clear;
+      // voie réservée aux Cybercab : le convoi laisse le carrefour dégagé
+      const clear = Math.min(len * 0.25, Math.max(Math.abs(x0), Math.abs(x0 + W)) + carLen * 0.5);
       list.sort((p, q) => net.vProg[q] - net.vProg[p]);
-      const last = new Array(carLanes).fill(Infinity);
       let lastCab = Infinity;
+      const queue = [];
       for (const i of list) {
-       const type = net.vType[i], copies = Math.max(1, Math.round(net.vW[i]));
+       const type = net.vType[i], copies = Math.max(1, Math.round(net.vW[i])), id = net.vId[i];
        for (let c = 0; c < copies; c++) {
-        // un agent du moteur représente plusieurs véhicules réels : ils se suivent, à quelques longueurs d'écart
-        const h = (((i * 7 + c * 13) * 2654435761) >>> 0) / 4294967296;
-        const want = Math.min(end, net.vProg[i] * len - c * gap * (1.5 + 1.5 * h));
-        if (want < clear) break;
+        // un agent du moteur représente plusieurs véhicules réels : ils se suivent, à quelques longueurs d'écart.
+        // Chaque véhicule garde son numéro, donc sa couleur, sa voie et son écart, du départ à l'arrivée.
+        const key = id * 8 + c, hs = (key * 2654435761) >>> 0, h = hs / 4294967296;
+        const want = net.vProg[i] * len - c * gap * (1.5 + 1.5 * h);
         if (type > 0 && net.cabLane && onLine) {
           // voie réservée : les Cybercab se suivent en convoi serré
+          // d'un tronçon du tracé au suivant, le convoi se prolonge sans coupure le long de la ligne
+          const pv = net.vPrev[i], fromLine = pv >= 0 && net.ecor[pv] === 1;
           const at = Math.min(want, lastCab - (carLen + 0.9 * big));
-          if (at < clear || cabs.length >= 9000) break;
+          if (at < (fromLine ? -80 * big : clear) || cabs.length >= 9000) break;
           lastCab = at;
           // sur l'emprise elle-même, à droite de son axe dans le sens de marche
           const s0 = state.corS0[ed], s1 = state.corS1[ed], sl = s0 + ((s1 - s0) * at) / len, fw = s1 >= s0 ? 1 : -1;
           sim.lineLL(sl - 4 * fw, lp); sim.lineLL(sl + 4 * fw, lq);
-          const dx = (lq[0] - lp[0]) * TQ.geo.KX, dy = (lq[1] - lp[1]) * TQ.geo.KY, dl = Math.hypot(dx, dy) || 1, off = AXIS + LANE / 2;
-          out[0] = (lp[0] + lq[0]) / 2 + ((dy / dl) * off) / TQ.geo.KX; out[1] = (lp[1] + lq[1]) / 2 - ((dx / dl) * off) / TQ.geo.KY; out[2] = (Math.atan2(dy, dx) * 180) / Math.PI;
-          if (out[0] < w || out[0] > e || out[1] < s || out[1] > n) continue;
-          cabs.push({ p: [out[0], out[1], 0], yaw: out[2], i: i * 4 + c, type });
+          const dx = (lq[0] - lp[0]) * KX, dy = (lq[1] - lp[1]) * KY, dl = Math.hypot(dx, dy) || 1, off = AXIS + LANE / 2;
+          show(key, type, 0, 1, (Math.atan2(dy, dx) * 180) / Math.PI, (lp[0] + lq[0]) / 2 + ((dy / dl) * off) / KX, (lp[1] + lq[1]) / 2 - ((dx / dl) * off) / KY);
           continue;
         }
-        let k = 0;
-        for (let q = 1; q < carLanes; q++) if (last[q] > last[k]) k = q;
-        const at = Math.min(want, last[k] - gap);
-        if (at < clear) break;
-        last[k] = at;
-        net.edgePosLane(ed, at, lateral(k), out, 0);
-        if (out[0] < w || out[0] > e || out[1] < s || out[1] > n) continue;
-        const v = { p: [out[0], out[1], 0], yaw: out[2], i: i * 4 + c, type };
-        if (type === 0) { if (cars.length < 14000) cars.push(v); } else if (cabs.length < 9000) cabs.push(v);
+        queue.push({ i, key, hs, want });
        }
       }
+      // de l'avant vers l'arrière : chacun reste dans sa voie, derrière celui qui le précède
+      queue.sort((p, q) => q.want - p.want);
+      const last = new Array(carLanes).fill(Infinity);
+      for (const q of queue) {
+        const i = q.i, type = net.vType[i], prev = net.vPrev[i], dest = net.vDest[i], k = (q.hs >>> 7) % carLanes;
+        // tronçon suivant de son trajet (-1 : il arrive à destination au bout de celui-ci)
+        const next = endNode === net.dnode[dest] ? -1 : (type > 0 && net.cabLane ? net.tnextC : net.tnext)[dest][endNode];
+        const last1 = next < 0, spd = len / net.vTT[i], paint = (q.hs >>> 11) & 7;
+        const at = Math.min(q.want, last[k] - gap);
+        last[k] = at;
+        if (at >= 0) {
+          // départ et arrivée : l'auto sort de son stationnement ou y entre, au lieu d'apparaître d'un coup
+          const sc = prev < 0 && at < FADE ? Math.max(0.08, at / FADE) : next < 0 && at > len - FADE ? Math.max(0.08, (len - at) / FADE) : 1;
+          emit(q.key, type, paint, sc, ed, at, k, prev, next, last1 ? [] : null, spd);
+          continue;
+        }
+        // il suit de loin ou la file déborde : il roule encore sur un tronçon déjà quitté par la tête du groupe
+        // (au départ, il n'est pas encore sorti de son stationnement)
+        let back = at, nxt = ed;
+        for (let d = 0; d < 4; d++) {
+          const pe = HIST[d][i];
+          if (pe < 0) break;
+          back += net.elen[pe];
+          if (back >= 0) {
+            const older = d < 3 ? HIST[d + 1][i] : -1;
+            let rt = null;
+            if (last1) { rt = [ed]; for (let b = 0; b < d; b++) rt.unshift(HIST[b][i]); }
+            emit(q.key, type, paint, older < 0 && back < FADE ? Math.max(0.08, back / FADE) : 1, pe, back, k, older, nxt, rt, spd);
+            break;
+          }
+          nxt = pe;
+        }
+      }
     }
-    const mesh = { sizeScale: big, getPosition: (d) => d.p, getOrientation: (d) => [0, d.yaw, 0], material: { ambient: 0.5, diffuse: 0.65, shininess: 40, specularColor: [70, 70, 70] } };
+    // Les autos dont le groupe vient d'arriver finissent leur trajet jusqu'à destination au lieu de s'effacer en route.
+    for (const [key, m] of mem) {
+      if (m.f === frame) continue;
+      if (!m.rt || (m.age += simDt) > 900) { if (frame - m.f > 2) mem.delete(key); continue; }
+      m.at += m.spd * simDt;
+      if (m.rt.length && m.at >= net.elen[m.ed]) { m.at -= net.elen[m.ed]; m.prev = m.ed; m.ed = m.rt.shift(); }
+      const left = m.rt.length ? Infinity : net.elen[m.ed] - m.at;
+      if (left < 0.4) { mem.delete(key); continue; }
+      place(m.ed, m.at, m.k, m.prev, m.rt.length ? m.rt[0] : -1);
+      m.ox *= 0.88; m.oy *= 0.88;
+      show(key, m.type, m.paint, left < FADE ? Math.max(0.08, left / FADE) : 1, out[2], out[0] + m.ox / KX, out[1] + m.oy / KY);
+    }
+    const mesh = { sizeScale: big, extensions: TER, getPosition: (d) => d.p, getOrientation: (d) => [0, d.yaw, 0], material: { ambient: 0.5, diffuse: 0.65, shininess: 40, specularColor: [70, 70, 70] } };
     const GLASS = [34, 42, 54];
-    layers.push(new deck.SimpleMeshLayer(Object.assign({ id: 'cars3d', data: cars, mesh: MESH.car, getScale: [4.5, 1.85, 1.5], getColor: (d) => CAR_PAINT[d.i % CAR_PAINT.length] }, mesh)));
-    layers.push(new deck.SimpleMeshLayer(Object.assign({ id: 'cars3d-glass', data: cars, mesh: MESH.carGlass, getScale: [4.5, 1.85, 1.5], getColor: GLASS }, mesh)));
+    layers.push(new deck.SimpleMeshLayer(Object.assign({ id: 'cars3d', data: cars, mesh: MESH.car, getScale: (d) => [4.5 * d.sc, 1.85 * d.sc, 1.5 * d.sc], getColor: (d) => (net.cond.auto ? AUTO_PAINT : CAR_PAINT)[d.paint], updateTriggers: { getColor: [!!net.cond.auto] } }, mesh)));
+    layers.push(new deck.SimpleMeshLayer(Object.assign({ id: 'cars3d-glass', data: cars, mesh: MESH.carGlass, getScale: (d) => [4.5 * d.sc, 1.85 * d.sc, 1.5 * d.sc], getColor: GLASS }, mesh)));
     if (F) {
       // Cybercab : carrosserie dorée quand il transporte quelqu'un, plus pâle à vide
-      layers.push(new deck.SimpleMeshLayer(Object.assign({ id: 'cabs3d', data: cabs, mesh: MESH.cab, getScale: [4.3, 1.85, 1.3], getColor: (d) => (d.type === 2 ? [226, 180, 70] : [210, 196, 158]) }, mesh)));
-      layers.push(new deck.SimpleMeshLayer(Object.assign({ id: 'cabs3d-glass', data: cabs, mesh: MESH.cabGlass, getScale: [4.3, 1.85, 1.3], getColor: GLASS }, mesh)));
+      layers.push(new deck.SimpleMeshLayer(Object.assign({ id: 'cabs3d', data: cabs, mesh: MESH.cab, getScale: (d) => [4.3 * d.sc, 1.85 * d.sc, 1.3 * d.sc], getColor: (d) => (d.type === 2 ? [226, 180, 70] : [210, 196, 158]) }, mesh)));
+      layers.push(new deck.SimpleMeshLayer(Object.assign({ id: 'cabs3d-glass', data: cabs, mesh: MESH.cabGlass, getScale: (d) => [4.3 * d.sc, 1.85 * d.sc, 1.3 * d.sc], getColor: GLASS }, mesh)));
     }
     if (L) {
       // rames et autobus articulés : des caisses qui suivent chacune la courbe, à droite de l'axe selon le sens
@@ -392,21 +973,21 @@
         }
       }
       const size = [partLen / big, L.p.width, L.kind === 'tram' ? 3.4 : 3.1];
-      layers.push(new deck.SimpleMeshLayer(Object.assign({}, mesh, { id: 'line-veh', data: veh, mesh: MESH.module, getScale: size, getColor: lineColor, pickable: true })));
+      layers.push(new deck.SimpleMeshLayer(Object.assign({}, mesh, { id: 'line-veh3d', data: veh, mesh: MESH.module, getScale: size, getColor: lineColor, pickable: true })));
       layers.push(new deck.SimpleMeshLayer(Object.assign({}, mesh, { id: 'line-veh-glass', data: veh, mesh: MESH.moduleGlass, getScale: size, getColor: [34, 42, 54] })));
     }
-    return layers.concat(stationLayers3d(lineColor, lineKey));
+    return layers.concat(stationLayers3d(lineColor, lineKey, TER));
   }
 
-  function stationLayers3d(lineColor, lineKey) {
+  function stationLayers3d(lineColor, lineKey, ext) {
     const layers = [];
     layers.push(new deck.ScatterplotLayer({
-      id: 'stations', data: stationData, getPosition: (d) => d.pos, pickable: true, stroked: true, filled: true,
+      id: 'stations3d', data: stationData, getPosition: (d) => d.pos, pickable: true, stroked: true, filled: true,
       getFillColor: [255, 255, 255, 255], getLineColor: [...lineColor, 255], lineWidthUnits: 'pixels', getLineWidth: 3,
-      getRadius: (d) => (d.hub ? 7 : 5), radiusUnits: 'pixels', updateTriggers: { getLineColor: [lineKey] }, parameters: { depthTest: false },
+      getRadius: (d) => (d.hub ? 7 : 5), radiusUnits: 'pixels', updateTriggers: { getLineColor: [lineKey] }, parameters: { depthTest: false }, extensions: ext,
     }));
     if (deck.TextLayer) layers.push(new deck.TextLayer({
-      id: 'station-names', data: stationData, getPosition: (d) => d.pos, getText: (d) => d.name, characterSet: state.allChars,
+      id: 'station-names3d', extensions: ext, data: stationData, getPosition: (d) => d.pos, getText: (d) => d.name, characterSet: state.allChars,
       fontFamily: '"Barlow Semi Condensed", "Segoe UI", sans-serif', fontWeight: 600, getSize: 14, getColor: [20, 32, 47, 255],
       getPixelOffset: [0, -18], getTextAnchor: 'middle', getAlignmentBaseline: 'bottom',
       fontSettings: { sdf: true, fontSize: 40, buffer: 14 }, outlineWidth: 4, outlineColor: [255, 255, 255, 255], parameters: { depthTest: false },
@@ -449,7 +1030,9 @@
       if (type === 0) {
         if (!state.layers.cars || k >= 40000) continue;
         net.edgePos(net.vEdge[i], net.vProg[i], pos, k * 2);
-        const o = k * 4; col[o] = 205; col[o + 1] = 216; col[o + 2] = 230; col[o + 3] = 125;
+        const o = k * 4;
+        if (net.cond.auto) { col[o] = 96; col[o + 1] = 226; col[o + 2] = 212; col[o + 3] = 150; } // autos connectées : turquoise
+        else { col[o] = 205; col[o + 1] = 216; col[o + 2] = 230; col[o + 3] = 125; }
         k++;
       } else if (c < 12000) {
         net.edgePos(net.vEdge[i], net.vProg[i], cpos, c * 2);
@@ -618,7 +1201,7 @@
 
   /** Barres divergentes : résultat de l'exploitant et bilan pour la société, à la même échelle. */
   function econChart() {
-    const rows = sim.history.filter((s) => s.line || s.cab).map((s) => { const a = TQ.economics(s).annual; return { label: s.label, v: [a.net, a.society.net] }; });
+    const rows = sim.history.filter((s) => s.line || s.cab || s.scenario.auto).map((s) => { const a = TQ.economics(s).annual; return { label: s.label, v: [a.net, a.society.net] }; });
     if (!rows.length) return '';
     const top = Math.max(1, ...rows.flatMap((r) => r.v.map(Math.abs)));
     const bar = (v, cls) => `<div class="dv ${cls}"><i style="${v < 0 ? 'right' : 'left'}:50%;width:${((Math.abs(v) / top) * 50).toFixed(2)}%;background:var(--${v < 0 ? 'bad' : 'ok'})"></i><b style="${v < 0 ? 'left' : 'right'}:calc(50% + 6px)">${moneyText(v)}</b></div>`;
@@ -628,7 +1211,7 @@
   }
 
   function econRow(s) {
-    if (!s.line && !s.cab) return `<tr><td>${esc(s.label)}</td>${'<td>–</td>'.repeat(10)}</tr>`;
+    if (!s.line && !s.cab && !(s.scenario && s.scenario.auto)) return `<tr><td>${esc(s.label)}</td>${'<td>–</td>'.repeat(10)}</tr>`;
     const e = TQ.economics(s), a = e.annual, y = a.society;
     const signed = (v, strong) => (v == null ? '<td>–</td>' : `<td style="color:var(--${v < 0 ? 'bad' : 'ok'})${strong ? ';font-weight:600' : ''}">${moneyText(v)}</td>`);
     return `<tr><td>${esc(s.label)}</td><td>${moneyText(e.capex)}</td><td>${moneyText(a.revenue)}</td><td>${moneyText(a.opex)}</td><td>${moneyText(a.capital)}</td>${signed(a.net, true)}${signed(y.riders)}${signed(y.drivers)}${signed(y.co2)}${signed(y.rtcLoss)}${signed(y.net, true)}</tr>`;
@@ -689,7 +1272,7 @@
     $('pool').addEventListener('change', (e) => restart(sim.t, { pool: e.target.checked }));
     $('carfree').addEventListener('input', (e) => { $('carfree-out').textContent = e.target.value + ' %'; });
     $('carfree').addEventListener('change', (e) => { if (+e.target.value / 100 !== sim.scenario.carFree) restart(sim.t, { carFree: +e.target.value / 100 }); });
-    radio('speeds', 'speed', (v) => { state.speed = +v; });
+    radio('speeds', 'speed', (v) => { state.speed = +v; state.speedBefore = null; });
     const fleet = $('fleet'), fare = $('fare');
     const outs = () => { $('fleet-out').textContent = fmt.format(+fleet.value); $('fare-out').textContent = fmt2.format(+fare.value) + ' $'; };
     fleet.addEventListener('input', outs); fare.addEventListener('input', outs);
@@ -738,23 +1321,25 @@
     $('run-day').addEventListener('click', () => runBatch([{}]));
     // quatre scénarios types, pour remplir la comparaison d'un clic
     // aux réglages de départ (tarif, saison), pour que les quatre lignes se comparent entre elles
-    const base = { farePerKm: TQ.PARAMS.cab.farePerKm, winter: false, pool: false, carFree: 0 };
+    const base = { farePerKm: TQ.PARAMS.cab.farePerKm, winter: false, pool: false, carFree: 0, auto: false };
     $('run-all').addEventListener('click', () => runBatch([
       { line: 'tram', cab: 'off' }, { line: 'bus', cab: 'off' },
       { line: 'cablane', cab: 'corridor', fleet: 3000 }, { line: 'none', cab: 'wide', fleet: 1500 },
     ].map((c) => Object.assign({}, base, c))));
     // un lien collé dans l'onglet déjà ouvert remplace le scénario et les coûts
     window.addEventListener('hashchange', () => {
-      const key = (c) => ['line', 'cab', 'fleet', 'farePerKm', 'winter', 'pool', 'carFree'].map((k) => c[k]).join('|');
+      const key = (c) => ['line', 'cab', 'fleet', 'farePerKm', 'winter', 'pool', 'carFree', 'auto'].map((k) => !c[k] ? 0 : c[k]).join('|');
       const before = key(sim.scenario), was3d = state.view3d;
       for (const id in COSTS) econSet(COSTS[id][0], dig(TQ.ECON_DEFAULTS, COSTS[id][0]));
-      const sc = Object.assign({ fleet: 3000, farePerKm: TQ.PARAMS.cab.farePerKm, winter: false, pool: false, carFree: 0 }, readHash());
+      const sc = Object.assign({ fleet: 3000, farePerKm: TQ.PARAMS.cab.farePerKm, winter: false, pool: false, carFree: 0, auto: false }, readHash());
       if (key(sc) !== before) { state.batch = null; sim.scenario = sc; sim.reset(TQ.PARAMS.dayStart); }
       if (state.view3d !== was3d) setView3d(state.view3d);
+      if (state.view3d) setPhoto(state.wantPhoto);
       syncControls(); lineHint();
       if ($('dlg-compare').open) renderCompare();
     });
     $('winter').addEventListener('change', (e) => restart(sim.t, { winter: e.target.checked }));
+    $('auto').addEventListener('change', (e) => { $('auto-hint').hidden = !e.target.checked; restart(sim.t, { auto: e.target.checked }); syncControls(); });
     document.querySelectorAll('.starts button').forEach((b) => b.addEventListener('click', () => {
       const h = +b.dataset.start;
       if (h * 3600 <= TQ.PARAMS.dayStart) { state.batch = null; sim.reset(TQ.PARAMS.dayStart); } else restart(h * 3600);

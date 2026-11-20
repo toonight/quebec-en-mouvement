@@ -120,6 +120,23 @@ test('Cybercab : recettes et batterie suivent les kilomètres réellement parcou
   assert.ok(Math.abs(odo * F.w - (s.cab.vkmEmpty + s.cab.vkmLoaded)) / (odo * F.w) < 0.02, 'odomètres ' + odo * F.w + ' vs ' + (s.cab.vkmEmpty + s.cab.vkmLoaded));
 });
 
+test('autos autonomes et connectées : sans feux, la congestion fond ; sans l\'option, rien ne change', () => {
+  const base = run({ line: 'none', cab: 'off' }, 2.2, 6 * 3600), auto = run({ line: 'none', cab: 'off', auto: true }, 2.2, 6 * 3600);
+  const b = base.summary(), a = auto.summary();
+  assert.ok(a.congestion < b.congestion * 0.5, `temps perdu ${a.congestion} contre ${b.congestion}`);
+  assert.ok(a.avgSpeed > b.avgSpeed * 1.15);
+  assert.deepStrictEqual(a.modes, b.modes); // la demande ne dépend pas de l'option quand rien d'autre ne change
+  assert.ok(a.co2Avoided > 0 && b.co2Avoided === 0);
+  assert.strictEqual(base.net.cond.auto, false);
+  assert.ok(a.label.startsWith('Autos autonomes'));
+  // retirer des autos de la route ne peut pas faire baisser le CO2 évité
+  const tram = run({ line: 'tram', cab: 'off', auto: true }, 2.2, 6 * 3600).summary();
+  assert.ok(tram.co2Avoided > a.co2Avoided - 1, `tram + auto ${tram.co2Avoided} t contre ${a.co2Avoided} t`);
+  // gain des automobilistes : temps total par kilomètre comparé à la journée de référence
+  const y = TQ.economics(Object.assign({}, a, { elapsedH: 24 })).society, ref = TQ.REFERENCE.normal;
+  assert.ok(Math.abs(y.drivers - (ref.vhPerVkm - a.carVh / a.carVkm) * a.carVkm * TQ.ECON.carOccupancy * TQ.ECON.vot) < 1e-3);
+});
+
 test('bilan pour la société : somme des composantes et rôle de la référence', () => {
   const s = { elapsedH: 24, scenario: { winter: false }, carVkm: 14e6, carDelayH: 90000, riderGainH: 3000, co2Avoided: 20,
     lineFrom: { rtc: 40000, auto: 20000, actif: 5000 }, line: { kind: 'tram', boardings: 70000, vehKm: 7000 } };

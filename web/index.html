@@ -51,6 +51,8 @@
 
   <section>
     <h2>Conditions</h2>
+    <label class="check"><input type="checkbox" id="auto" aria-describedby="auto-hint"> Toutes les autos autonomes et connectées (plus de feux aux carrefours)</label>
+    <p class="hint" id="auto-hint" role="status" hidden>Supposition : tout le parc remplacé par des autos électriques à conduite autonome (par exemple des Tesla) qui se coordonnent entre elles. Le coût de ce remplacement n'est pas compté.</p>
     <label class="check"><input type="checkbox" id="winter"> Journée d'hiver (chaussée, autonomie des batteries)</label>
     <div class="starts" role="group" aria-label="Heure de départ">
       <span>Reprendre à</span>
@@ -64,7 +66,7 @@
     <label class="check"><input type="checkbox" id="ly-roads" checked> Congestion des rues</label>
     <label class="check"><input type="checkbox" id="ly-zone" checked> Zone desservie par les Cybercab</label>
     <ul class="legend">
-      <li><i class="dot car"></i>1 point = 4 automobiles</li>
+      <li><i class="dot car"></i><span id="lg-car">1 point = 4 automobiles</span></li>
       <li><i class="dot cab"></i>Cybercab en course</li>
       <li><i class="dot cab-empty"></i>Cybercab à vide ou libre</li>
       <li><i class="ramp"></i>Rue fluide, chargée, saturée</li>
@@ -177,7 +179,12 @@
   </figure>
 </div>
 
-<button id="view3d" class="mapbtn" aria-pressed="false">Vue 3D</button>
+<div class="mapbar">
+  <button id="view3d" class="mapbtn" aria-pressed="false">Vue 3D</button>
+  <button id="photo" class="mapbtn only3d" aria-pressed="false">Bâtiments réels</button>
+  <p id="auto-badge" class="mapbadge" hidden>Autos autonomes et connectées : carrefours sans feux</p>
+  <p id="photo-credits" class="mapnote" hidden><b>Google</b> <span id="photo-src"></span> <button class="link" id="photo-edit">Changer la clé</button></p>
+</div>
 
 <div class="status" id="status">Chargement du réseau routier de Québec…</div>
 
@@ -194,11 +201,29 @@
   <ul>
     <li><b>Choisissez un scénario</b> dans le panneau de gauche : le mode sur le tracé, puis une flotte de Cybercab si vous voulez.</li>
     <li><b>Regardez la journée défiler</b> : chaque point pâle représente quatre autos, les rues virent à l'ambre puis au rouge quand elles se chargent.</li>
-    <li><b>Passez en vue 3D</b> (bouton en haut de la carte) pour voir la ville en volume et chaque véhicule sur sa voie.</li>
+    <li><b>Passez en vue 3D</b> (bouton en haut de la carte) pour voir la ville en volume et chaque véhicule sur sa voie. Avec une clé Google, « Bâtiments réels » affiche la ville photographiée.</li>
     <li><b>Comparez</b> l'achalandage, la rentabilité et le bilan pour la société dans « Comparer les journées simulées ».</li>
   </ul>
   <p class="hint">Projet citoyen indépendant, calé sur des données publiques. Ce n'est pas une étude officielle : les hypothèses sont toutes affichées et modifiables.</p>
   <form method="dialog"><button class="primary" autofocus>Commencer</button></form>
+</dialog>
+
+<dialog id="dlg-photo" class="welcome">
+  <form method="dialog"><button class="close" aria-label="Fermer">×</button></form>
+  <h2>Bâtiments réels</h2>
+  <p class="lead">Ce mode remplace les volumes dessinés par la ville photographiée en 3D (tuiles photoréalistes de Google) : vraies façades, vrais toits, vrai relief. Google exige une clé d'API personnelle.</p>
+  <ul>
+    <li>Dans la console Google Cloud, créez une clé et activez « Map Tiles API ». Un compte de facturation est requis.</li>
+    <li>Restreignez la clé à cette API et à l'adresse de ce site.</li>
+    <li>Chaque activation du mode compte pour un chargement facturable par Google, au-delà de son quota gratuit mensuel.</li>
+    <li>La clé reste dans ce navigateur. Elle n'est envoyée qu'à Google et n'apparaît jamais dans le lien partageable.</li>
+  </ul>
+  <form id="photo-form" class="keyform">
+    <label for="photo-key">Clé d'API Google Maps Platform</label>
+    <input id="photo-key" type="password" autocomplete="off" spellcheck="false" aria-describedby="photo-msg" autofocus>
+    <p class="hint" id="photo-msg" role="status"></p>
+    <p class="actions"><button class="primary" type="submit">Enregistrer et afficher</button> <button class="link" type="button" id="photo-clear">Effacer la clé</button></p>
+  </form>
 </dialog>
 
 <dialog id="dlg-compare">

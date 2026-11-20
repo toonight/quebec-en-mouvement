@@ -65,7 +65,7 @@
 
     // --- bilan pour la société : les tarifs payés ne sont qu'un transfert entre voyageurs et exploitants
     const soc = (out.society = { riders: 0, drivers: null, co2: 0, rtcLoss: 0 });
-    if (parts.length) {
+    if (parts.length || (s.scenario && s.scenario.auto)) {
       // voyageurs qui changent de mode : temps et argent gagnés (tarif compris)
       soc.riders = ((s.riderGainH || 0) * E.vot);
       // une course partagée coûte à chacun moins que le plein tarif sur lequel il a choisi : l'écart revient aux voyageurs
@@ -78,6 +78,8 @@
       // automobilistes restants : écart de temps perdu par kilomètre avec la journée de référence
       const ref = TQ.REFERENCE && TQ.REFERENCE[s.scenario && s.scenario.winter ? 'winter' : 'normal'];
       if (ref && s.carVkm > 0) soc.drivers = (ref.delayPerVkm - s.carDelayH / s.carVkm) * s.carVkm * E.carOccupancy * E.vot;
+      // parc autonome : la vitesse libre change aussi (plus d'arrêts aux feux), on compare donc le temps total par kilomètre
+      if (ref && ref.vhPerVkm && s.carVkm > 0 && s.carVh > 0 && s.scenario && s.scenario.auto) soc.drivers = (ref.vhPerVkm - s.carVh / s.carVkm) * s.carVkm * E.carOccupancy * E.vot;
     }
     soc.net = out.net + soc.riders + soc.rtcLoss + soc.co2 + (soc.drivers || 0);
 

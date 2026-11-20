@@ -35,6 +35,10 @@
     walkMax: 1100,
     feederSpeed: 333, // m/min (20 km/h)
     rtcSpeedKmh: 17, // vitesse porte-à-porte des parcours actuels
+    // Parc entièrement autonome et connecté (hypothèse) : les autos se coordonnent, les carrefours n'ont plus de feux.
+    // Rues : débit par voie proche d'une circulation ininterrompue, vitesse libre sans arrêts aux feux.
+    // Autoroutes : pelotons à intervalles courts. Parc électrique.
+    auto: { streetCap: 1.8, motorwayCap: 1.4, streetSpeed: 1.25, linearDelay: { street: 0.1, motorway: 0.05 }, kwhKm: 0.17 },
     // Conditions hivernales
     winterCap: 0.9,
     winterSpeed: 0.92,

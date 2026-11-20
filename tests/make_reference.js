@@ -9,7 +9,7 @@ for (const [key, winter] of [['normal', false], ['winter', true]]) {
   const sim = new TQ.Simulation(data, { scenario: { line: 'none', cab: 'off', winter } });
   while (!sim.history.length) sim.step(10);
   const s = sim.history[0];
-  out[key] = { carVkm: Math.round(s.carVkm), carDelayH: Math.round(s.carDelayH), delayPerVkm: +(s.carDelayH / s.carVkm).toFixed(6) };
+  out[key] = { carVkm: Math.round(s.carVkm), carDelayH: Math.round(s.carDelayH), delayPerVkm: +(s.carDelayH / s.carVkm).toFixed(6), vhPerVkm: +(s.carVh / s.carVkm).toFixed(6) };
   console.log(key, out[key]);
 }
 const js = `/* Journée de référence (situation actuelle), produite par tests/make_reference.js. Ne pas modifier à la main. */

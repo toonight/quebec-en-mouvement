@@ -83,7 +83,7 @@
     /** Temps de parcours des Cybercab : ceux de la voie réservée si elle existe, sinon ceux des autos. */
     get cdist() { return this.cabLane ? this.tdistC : this.tdist; }
 
-    /** Applique le retrait d'une voie le long du tracé (site propre), la voie réservée aux Cybercab et l'hiver. */
+    /** Applique le retrait d'une voie le long du tracé (site propre), la voie réservée aux Cybercab, l'hiver et le parc autonome. */
     setConditions(c) {
       const P = TQ.PARAMS;
       this.cond = c;
@@ -95,6 +95,9 @@
           const l = this.elanes[e];
           cap *= l >= 2 ? (l - 1) / l : 0.85;
         }
+        const cl = this.ecls[e], fast = cl === 0 || cl === 1 || cl === 5;
+        if (c.auto) { cap *= fast ? P.auto.motorwayCap : P.auto.streetCap; if (!fast) v *= P.auto.streetSpeed; }
+        this.elin[e] = (c.auto ? P.auto.linearDelay : P.linearDelay)[fast ? 'motorway' : 'street'];
         if (c.winter) { cap *= P.winterCap; v *= P.winterSpeed; }
         this.ecap[e] = cap;
         this.et0[e] = this.elen[e] / v;
@@ -204,13 +207,15 @@
       this.vEdge = new Int32Array(cap); this.vProg = new Float32Array(cap); this.vTT = new Float32Array(cap);
       this.vDest = new Int16Array(cap); this.vType = new Uint8Array(cap); this.vW = new Float32Array(cap);
       this.vPay = new Int32Array(cap); this.vVar = new Float32Array(cap);
+      // pour l'affichage seulement : numéro propre à chaque véhicule et les derniers tronçons quittés, du plus récent au plus ancien (-1 au départ)
+      this.vId = new Int32Array(cap); this.vPrev = new Int32Array(cap); this.vPrev2 = new Int32Array(cap); this.vPrev3 = new Int32Array(cap); this.vPrev4 = new Int32Array(cap); this.vSeq = 0;
       this.stats = [0, 1, 2, 3].map(() => ({ vkm: 0, vh: 0, vhFree: 0 }));
       this.win = { len: 0, time: 0, free: 0 }; // fenêtre glissante pour la vitesse moyenne
     }
 
     grow() {
       const cap = this.vcap * 2;
-      for (const k of ['vEdge', 'vProg', 'vTT', 'vDest', 'vType', 'vW', 'vPay', 'vVar']) {
+      for (const k of ['vEdge', 'vProg', 'vTT', 'vDest', 'vType', 'vW', 'vPay', 'vVar', 'vId', 'vPrev', 'vPrev2', 'vPrev3', 'vPrev4']) {
         const a = new this[k].constructor(cap); a.set(this[k]); this[k] = a;
       }
       this.vcap = cap;
@@ -230,6 +235,7 @@
       const i = this.vn++;
       this.vEdge[i] = e; this.vProg[i] = 0; this.vDest[i] = dest; this.vType[i] = type; this.vW[i] = w; this.vPay[i] = payload;
       this.vVar[i] = 0.93 + 0.14 * rnd();
+      this.vId[i] = this.vSeq++; this.vPrev[i] = -1; this.vPrev2[i] = -1; this.vPrev3[i] = -1; this.vPrev4[i] = -1;
       this.vTT[i] = (cab ? this.ecabT[e] : this.ett[e]) * this.vVar[i];
       if (cab && this.cabLane && this.ecor[e]) this.ecntC[e] += w; else this.ecnt[e] += w;
       if (cab && this.cabIdx) this.cabIdx[payload] = i;
@@ -242,7 +248,7 @@
      * Peut aussi modifier this.arrType pour changer le type du véhicule qui poursuit.
      */
     stepVehicles(dt, onArrive) {
-      const { vEdge, vProg, vTT, vDest, vType, vW, vPay, vVar, eb, ett, ecabT, et0, elen, dnode, ecnt, ecntC, ecor, cabIdx } = this;
+      const { vEdge, vProg, vTT, vDest, vType, vW, vPay, vVar, vId, vPrev, vPrev2, vPrev3, vPrev4, eb, ett, ecabT, et0, elen, dnode, ecnt, ecntC, ecor, cabIdx } = this;
       const lane = this.cabLane, tnCar = this.tnext, tnCab = lane ? this.tnextC : this.tnext;
       for (let i = this.vn - 1; i >= 0; i--) {
         let p = vProg[i] + dt / vTT[i];
@@ -266,6 +272,7 @@
               if (i !== last) {
                 vEdge[i] = vEdge[last]; vProg[i] = vProg[last]; vTT[i] = vTT[last]; vDest[i] = vDest[last];
                 vType[i] = vType[last]; vW[i] = vW[last]; vPay[i] = vPay[last]; vVar[i] = vVar[last];
+                vId[i] = vId[last]; vPrev[i] = vPrev[last]; vPrev2[i] = vPrev2[last]; vPrev3[i] = vPrev3[last]; vPrev4[i] = vPrev4[last];
                 if (vType[i] > 0 && cabIdx) cabIdx[vPay[i]] = i;
               }
               p = -1;
@@ -276,7 +283,7 @@
           const isCab = vType[i] > 0;
           const ne = (isCab ? tnCab : tnCar)[dest][node];
           const left = (p - 1) * vTT[i];
-          vEdge[i] = ne;
+          vPrev4[i] = vPrev3[i]; vPrev3[i] = vPrev2[i]; vPrev2[i] = vPrev[i]; vPrev[i] = e; vEdge[i] = ne;
           vTT[i] = (isCab ? ecabT[ne] : ett[ne]) * vVar[i];
           if (isCab && lane && ecor[ne]) ecntC[ne] += w; else ecnt[ne] += w;
           p = left / vTT[i];
@@ -328,7 +335,7 @@
     }
 
     resetTraffic() {
-      this.vn = 0; this.refreshCursor = 0; // même point de départ à chaque journée : résultats reproductibles
+      this.vn = 0; this.vSeq = 0; this.refreshCursor = 0; // même point de départ à chaque journée : résultats reproductibles
       this.eflow.fill(0); this.ecnt.fill(0); this.eday.fill(0); this.eratio.fill(0);
       this.ecntC.fill(0); this.eflowC.fill(0);
       for (let e = 0; e < this.E; e++) { this.ett[e] = this.et0[e]; this.ecabT[e] = this.cabTime(e); }
