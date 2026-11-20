@@ -1,4 +1,4 @@
-/* Rentabilité financière d'un scénario : recettes, exploitation, coût annualisé de l'investissement.
+/* Rentabilité d'un scénario : résultat financier de l'exploitant, puis bilan pour la société.
    Montants en dollars canadiens. Les sources sont dans web/js/assumptions.js. */
 (function () {
   const TQ = (globalThis.TQ = globalThis.TQ || {});
@@ -10,9 +10,17 @@
     line: {
       tram: { capex: 7.6e9, life: 40, opexKm: 16, fixedYear: 12e6 },
       bus: { capex: 1.4e9, life: 30, opexKm: 10.5, fixedYear: 3e6 },
+      // voie réservée aux Cybercab : même emprise que les voies réservées aux bus
+      cablane: { capex: 1.4e9, life: 30, fixedYear: 3e6 },
     },
     cab: { vehicle: 42000, infraPerVeh: 8000, life: 5, opexKm: 0.25, kwhPrice: 0.12, fixedYearPerVeh: 4000 },
+    // bilan pour la société
+    vot: 22, // valeur d'une heure de déplacement ($)
+    carbon: 275, // coût social d'une tonne de CO2 ($), Environnement et Changement climatique Canada
+    carOccupancy: 1.21,
+    cabOccupancy: 1.4, // passagers par course de Cybercab, comme dans le moteur
   };
+  TQ.ECON_DEFAULTS = JSON.parse(JSON.stringify(TQ.ECON));
 
   // annuité constante : part d'un investissement à payer chaque année pendant n ans
   TQ.annuity = (rate, years) => (rate > 0 ? rate / (1 - Math.pow(1 + rate, -years)) : 1 / years);
@@ -32,6 +40,10 @@
         capital: perDay(p.capex * TQ.annuity(E.discount, p.life)),
       });
     }
+    if (s.cabLane) {
+      const p = E.line.cablane;
+      parts.push({ key: 'lane', kind: 'cablane', capex: p.capex, riders: 0, revenue: 0, opex: perDay(p.fixedYear), capital: perDay(p.capex * TQ.annuity(E.discount, p.life)) });
+    }
     if (s.cab) {
       const p = E.cab, capex = s.cab.fleet * (p.vehicle + p.infraPerVeh);
       parts.push({
@@ -50,9 +62,31 @@
     out.net = out.operating - out.capital;
     out.netPerRider = out.riders > 0 ? out.net / out.riders : 0;
     out.costCoverage = out.opex + out.capital > 0 ? out.revenue / (out.opex + out.capital) : 0;
+
+    // --- bilan pour la société : les tarifs payés ne sont qu'un transfert entre voyageurs et exploitants
+    const soc = (out.society = { riders: 0, drivers: null, co2: 0, rtcLoss: 0 });
+    if (parts.length) {
+      // voyageurs qui changent de mode : temps et argent gagnés (tarif compris)
+      soc.riders = ((s.riderGainH || 0) * E.vot);
+      // une course partagée coûte à chacun moins que le plein tarif sur lequel il a choisi : l'écart revient aux voyageurs
+      if (s.cab) soc.riders += (s.cab.revenue || 0) * (E.cabOccupancy - 1);
+      // recettes que perd le réseau d'autobus actuel quand ses usagers passent à la ligne ou au Cybercab
+      const fromRtc = s.fromRtc != null ? s.fromRtc : ((s.lineFrom && s.lineFrom.rtc) || 0) + ((s.cabFrom && s.cabFrom.rtc) || 0);
+      // (moins ceux qui y reviennent parce qu'ils n'ont plus d'auto)
+      soc.rtcLoss = -(fromRtc - (s.toRtc || 0)) * E.transitFare;
+      soc.co2 = (s.co2Avoided || 0) * E.carbon;
+      // automobilistes restants : écart de temps perdu par kilomètre avec la journée de référence
+      const ref = TQ.REFERENCE && TQ.REFERENCE[s.scenario && s.scenario.winter ? 'winter' : 'normal'];
+      if (ref && s.carVkm > 0) soc.drivers = (ref.delayPerVkm - s.carDelayH / s.carVkm) * s.carVkm * E.carOccupancy * E.vot;
+    }
+    soc.net = out.net + soc.riders + soc.rtcLoss + soc.co2 + (soc.drivers || 0);
+
     // projection annuelle : n'a de sens que pour une journée complète
     const k = frac > 0 ? E.daysPerYear / frac : 0;
-    out.annual = { revenue: out.revenue * k, opex: out.opex * k, capital: out.capital * k, operating: out.operating * k, net: out.net * k };
+    out.annual = {
+      revenue: out.revenue * k, opex: out.opex * k, capital: out.capital * k, operating: out.operating * k, net: out.net * k,
+      society: { riders: soc.riders * k, drivers: soc.drivers == null ? null : soc.drivers * k, co2: soc.co2 * k, rtcLoss: soc.rtcLoss * k, net: soc.net * k },
+    };
     return out;
   };
 })();

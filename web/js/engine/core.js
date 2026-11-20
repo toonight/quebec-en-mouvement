@@ -8,11 +8,14 @@
     dayStart: 5 * 3600, // la journée simulée va de 5 h à 5 h
     carOccupancy: 1.21, // EOD 2023
     truckFactor: 1.12, // camions et trafic de transit absents de l'EOD
-    bprAlpha: 0.7,
+    bprAlpha: 0.45,
     bprBeta: 4,
     bprMaxRatio: 1.9,
+    // retard proportionnel à la charge (feux, entrecroisements), sensible dès les débits moyens
+    linearDelay: { street: 0.6, motorway: 0.2 },
     flowTau: 600, // constante de temps (s) du lissage des débits
     treeRefresh: 1200, // recalcul des itinéraires (s simulées)
+    calmCongestion: 0.22, // sous ce temps perdu, les itinéraires sont recalculés quatre fois moins souvent
     // Profil horaire (part des déplacements quotidiens par heure, 0 h à 23 h). Calé sur les 4 périodes de l'EOD 2023
     // (pointe AM 23,6 %, jour 28,0 %, pointe PM 31,9 %, soir et nuit 16,5 %) ; heures de pointe 7 h et 16 h.
     hourly: [0.3, 0.15, 0.1, 0.1, 0.25, 0.6, 5.0, 11.7, 6.9, 4.3, 4.2, 4.6, 5.0, 4.7, 5.2, 9.7, 13.2, 9.0, 5.0, 3.6, 2.6, 1.9, 1.2, 0.7],
@@ -24,7 +27,7 @@
     vot: 22, // valeur du temps, $/h
     votTransit: 14, // valeur du temps des usagers du transport collectif face au tarif d'un robotaxi
     carCostKm: 0.22,
-    transitFare: 2.6, // $ par déplacement (moyenne titres et laissez-passer)
+    transitFare: 2.53, // $ par déplacement (recette moyenne au budget 2026 du RTC)
     carCaptivity: -1, // constante de captivité automobile vis-à-vis de la ligne (min) — calée sur la prévision d'achalandage
     walkSpeed: 80, // m/min
     walkWeight: 1.8,
@@ -54,9 +57,14 @@
         dwellBase: 12, dwellPerPax: 0.09, dwellMax: 110, bonus: 1, ivtWeight: 1.0, kwhKm: 0, co2Km: 0.9,
       },
     },
+    // voie réservée aux Cybercab sur le tracé : vitesse des convois (km/h) et capacité d'une voie (véh/h)
+    cabLane: { speed: 45, capacity: 2400 },
     cab: {
       seats: 2, occupancy: 1.4, batteryKwh: 47.6, kwhKm: 0.11, maxEtaMin: 12, chargeMin: 25, reserve: 0.15,
       fareBase: 3.5, farePerKm: 1.2, captivity: 9, corridorRadius: 1200, rebalanceIdleMin: 20,
+      localKmLoaded: 0.6, localKmEmpty: 0.3, // rues locales non modélisées, aux deux bouts d'une course
+      // courses partagées : rabais, détour ressenti (min), attente et détour maximaux pour jumeler deux demandes (min)
+      poolDiscount: 0.2, poolPerceivedMin: 2, poolMaxWaitMin: 6, poolMaxDetourMin: 5,
     },
   };
 

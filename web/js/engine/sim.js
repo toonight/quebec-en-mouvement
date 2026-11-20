@@ -12,7 +12,9 @@
       this.P = TQ.PARAMS;
       this.seed = opts.seed || 20261119;
       this.net = new TQ.Network(data);
-      this.scenario = Object.assign({ line: 'none', cab: 'off', fleet: 3000, farePerKm: this.P.cab.farePerKm, winter: false }, opts.scenario || {});
+      // line : none | tram | bus | cablane (voie réservée aux Cybercab : un seul type de véhicule par voie) ;
+      // pool : courses partagées ; carFree : part des résidents de la zone desservie qui renoncent à leur auto
+      this.scenario = Object.assign({ line: 'none', cab: 'off', fleet: 3000, farePerKm: this.P.cab.farePerKm, winter: false, pool: false, carFree: 0 }, opts.scenario || {});
       this.history = [];
       this.day = 1;
       this.prepareDemand();
@@ -118,16 +120,20 @@
     reset(start) {
       const sc = this.scenario, P = this.P;
       // flux aléatoires indépendants : la demande tirée ne dépend pas du scénario
-      this.rndDemand = TQ.rng(this.seed + this.day * 7919);
-      this.rnd = TQ.rng((this.seed ^ 0x9e3779b9) + this.day * 104729);
-      const rndLine = TQ.rng((this.seed ^ 0xc2b2ae35) + this.day), rndCab = TQ.rng((this.seed ^ 0x27d4eb2f) + this.day);
+      // et chaque journée rejoue le même tirage : les journées comparées, et la référence, ont la même demande
+      this.rndDemand = TQ.rng(this.seed + 7919);
+      this.rnd = TQ.rng((this.seed ^ 0x9e3779b9) + 104729);
+      const rndLine = TQ.rng((this.seed ^ 0xc2b2ae35) + 1), rndCab = TQ.rng((this.seed ^ 0x27d4eb2f) + 1);
       this.t = start; this.tDayStart = start;
       this.tDayEnd = P.dayStart + 86400 * (Math.floor((start - P.dayStart) / 86400) + 1); // prochaine frontière de 5 h
-      this.net.setConditions({ laneDrop: sc.line !== 'none', winter: sc.winter });
+      // la voie du tracé sert aux Cybercab quand elle leur est réservée
+      this.cabLane = sc.cab !== 'off' && sc.line === 'cablane';
+      // sans flotte, la voie réservée aux Cybercab n'existe pas : les autos gardent leurs voies
+      this.net.setConditions({ laneDrop: sc.line === 'tram' || sc.line === 'bus' || this.cabLane, winter: sc.winter, cabLane: this.cabLane });
       this.net.resetTraffic();
-      for (let d = 0; d < this.net.D; d++) this.net.computeTree(d);
-      this.line = sc.line === 'none' ? null : new TQ.TransitLine(this.data.line, sc.line, rndLine, sc.winter);
-      this.fleet = null;
+      for (let d = 0; d < this.net.D; d++) { this.net.computeTree(d); if (this.cabLane) this.net.computeTree(d, true); }
+      this.line = sc.line === 'none' || sc.line === 'cablane' ? null : new TQ.TransitLine(this.data.line, sc.line, rndLine, sc.winter);
+      this.fleet = null; this.net.cabKm = null; this.net.cabIdx = null;
       if (sc.cab !== 'off') {
         const mask = new Uint8Array(this.info.length);
         for (let p = 0; p < this.info.length; p++) {
@@ -135,7 +141,7 @@
           mask[p] = i.gate ? 0 : sc.cab === 'corridor' ? (this.lineDist[p] <= P.cab.corridorRadius ? 1 : 0) : i.zone <= 5 ? 1 : 0;
         }
         this.cabMask = mask;
-        this.fleet = new TQ.CabFleet(this.net, mask, sc.fleet, this.info, rndCab, sc.winter);
+        this.fleet = new TQ.CabFleet(this.net, mask, sc.fleet, this.info, rndCab, sc.winter, { pool: sc.pool });
       }
       this.pending = []; for (let i = 0; i < 64; i++) this.pending.push([]);
       this.pendingMin = Math.floor(start / 60);
@@ -143,7 +149,7 @@
       this.m = {
         trips: 0, modes: { auto: 0, rtc: 0, actif: 0, autre: 0, line: 0, cab: 0 },
         lineFrom: { auto: 0, rtc: 0, actif: 0 }, cabFrom: { auto: 0, rtc: 0, actif: 0, line: 0 },
-        carsRemoved: 0, divertedCarKm: 0, local: 0, cabUnserved: 0, crowKm: 0, cabRevenue: 0,
+        carsRemoved: 0, divertedCarKm: 0, local: 0, cabUnserved: 0, crowKm: 0, gainMin: 0, fromRtc: 0, toRtc: 0, carFree: 0,
       };
       this.series = { t: [], speed: [], congestion: [], lineLoad: [], lineBoard: [], cabWait: [], cars: [] };
       this.lastBoard = 0;
@@ -158,8 +164,12 @@
 
     scenarioLabel() {
       const s = this.scenario, parts = [];
-      if (s.line === 'tram') parts.push('Tramway'); else if (s.line === 'bus') parts.push('Bus voies réservées');
-      if (s.cab !== 'off') parts.push(`Cybercab ${s.cab === 'corridor' ? 'corridor' : 'réseau élargi'} (${s.fleet.toLocaleString('fr-CA')})`);
+      if (s.line === 'tram') parts.push('Tramway'); else if (s.line === 'bus') parts.push('Bus voies réservées'); else if (s.line === 'cablane' && s.cab !== 'off') parts.push('Voie réservée aux Cybercab');
+      const extra = [];
+      if (s.farePerKm !== this.P.cab.farePerKm) extra.push(`${s.farePerKm.toFixed(2).replace('.', ',')} $/km`);
+      if (s.pool) extra.push('courses partagées');
+      if (s.carFree > 0) extra.push(`${Math.round(s.carFree * 100)} % sans auto`);
+      if (s.cab !== 'off') parts.push(`Cybercab ${s.cab === 'corridor' ? 'corridor' : 'réseau élargi'} (${[s.fleet.toLocaleString('fr-CA'), ...extra].join(', ')})`);
       if (!parts.length) parts.push('Référence (situation actuelle)');
       if (s.winter) parts.push('hiver');
       return parts.join(' + ');
@@ -193,7 +203,7 @@
       this.flowAcc += dt;
       if (this.flowAcc >= 60) { net.updateFlows(this.flowAcc); this.flowAcc = 0; }
       // hors congestion, les itinéraires changent peu : recalcul quatre fois moins fréquent
-      this.treeAcc += (net.D * dt) / (this.cur.congestion < 0.12 ? P.treeRefresh * 4 : P.treeRefresh);
+      this.treeAcc += (net.D * dt) / (this.cur.congestion < P.calmCongestion ? P.treeRefresh * 4 : P.treeRefresh);
       if (this.treeAcc >= 1) { const n = Math.floor(this.treeAcc); net.refreshTrees(n); this.treeAcc -= n; }
       this.seriesAcc += dt;
       if (this.seriesAcc >= 600) { this.sample(); this.seriesAcc = 0; }
@@ -254,11 +264,12 @@
         this.m.crowKm += (TQ.geo.dist(A.lon, A.lat, this.info[d].lon, this.info[d].lat) / 1000) * P.scale;
         this.m.trips += P.scale;
         if (this.net.dnode[d] === this.net.dnode[o]) { this.m.local += P.scale; this.m.modes.actif += P.scale; continue; }
-        this.trip(o, d, zo, zd, k, rnd());
+        this.trip(o, d, zo, zd, k, rnd(), homeO ? o : d);
       }
     }
 
-    trip(o, d, zo, zd, k, r) {
+    /** home : point de demande du domicile du voyageur (origine ou destination du déplacement). */
+    trip(o, d, zo, zd, k, r, home) {
       const P = this.P, rnd = this.rnd, net = this.net, m = this.m, sc = P.scale;
       const b = (zo * 12 + zd) * 4, bs = this.baseShare[k];
       let base = r < bs[b] ? 0 : r < bs[b] + bs[b + 1] ? 1 : r < bs[b] + bs[b + 1] + bs[b + 2] ? 2 : 3;
@@ -271,6 +282,11 @@
       const gtRtc = P.walkWeight * 8 + P.waitWeight * 6 + (km / P.rtcSpeedKmh) * 60 + (km > 7 ? 6 : 0) + fareMin;
       const gtAct = (km / (km < 1.5 ? 4.8 : 13)) * 60;
       let mode = base; // 0 auto, 1 rtc, 2 actif, 3 autre, 4 ligne, 5 cab
+      // gain du voyageur qui change de mode : moitié de l'écart de coût généralisé (minutes) avec son mode d'origine
+      const gtBase = base === 0 ? gtCar : base === 1 ? gtRtc : gtAct;
+      let gain = 0;
+      // ménage qui a renoncé à son auto parce que la flotte dessert son quartier : ce déplacement se fait sans auto
+      const noCar = base === 0 && this.fleet && this.scenario.carFree > 0 && home != null && this.cabMask[home] === 1 && rnd() < this.scenario.carFree;
       let lineChoice = null, gtLine = Infinity;
       // --- report vers la ligne structurante
       if (this.line && base !== 3 && this.line.isOpen(this.t)) {
@@ -283,31 +299,61 @@
           if (co[x].feeder && cd[y].feeder) gt += 8;
           if (gt < gtLine) { gtLine = gt; lineChoice = { i, j, access: co[x].t }; }
         }
-        if (lineChoice) {
+        if (lineChoice && !noCar) {
           let p = 0;
           if (base === 1) p = TQ.sigmoid(P.theta * (gtRtc - gtLine + lp.bonus));
           else if (base === 0) p = TQ.sigmoid(P.theta * (gtCar - gtLine + lp.bonus - P.carCaptivity));
           else if (base === 2 && km > 1.5) p = 0.5 * TQ.sigmoid(P.theta * (gtAct - gtLine - 5));
-          if (rnd() < p) mode = 4;
+          if (rnd() < p) { mode = 4; gain = 0.5 * Math.max(0, gtBase - gtLine); }
         }
       }
       // --- report vers le Cybercab
-      if (this.fleet && base !== 3 && this.cabMask[o] && this.cabMask[d]) {
-        const C = P.cab, zone = A.zone < 0 ? 0 : A.zone;
-        const fare = C.fareBase + this.scenario.farePerKm * km;
+      const cabOk = this.fleet && base !== 3 && this.cabMask[o] && this.cabMask[d];
+      let cabFare = 0, cabZone = 0, gtCabNoCar = Infinity;
+      if (cabOk) {
+        const C = P.cab, zone = A.zone < 0 ? 0 : A.zone, pool = this.scenario.pool;
+        // course partagée : rabais sur le prix, contre un détour possible
+        const fare = (C.fareBase + this.scenario.farePerKm * km) * (pool ? 1 - C.poolDiscount : 1);
         const vot = mode === 4 || base === 1 ? P.votTransit : P.vot;
-        const gtCab = P.waitWeight * this.fleet.perceivedWait(zone) + tCar + (fare / vot) * 60;
+        // temps à bord : celui des Cybercab, plus court que celui des autos quand ils ont leur voie
+        const tCab = (this.cabLane ? net.cdist[d][net.dnode[o]] / 60 : tCar) + (pool ? C.poolPerceivedMin : 0);
+        const waitCab = P.waitWeight * this.fleet.perceivedWait(zone);
+        const gtCab = waitCab + tCab + (fare / vot) * 60;
+        // pour le bilan, le tarif est compté à sa valeur faciale, à la même valeur du temps que le mode d'origine
+        const gtCabGain = waitCab + tCab + (fare / P.vot) * 60;
+        cabFare = fare; cabZone = zone; gtCabNoCar = gtCabGain;
         let p;
+        if (noCar) p = 0; else
         if (mode === 4) p = TQ.sigmoid(P.theta * (gtLine - gtCab - 2));
         else if (base === 0) p = TQ.sigmoid(P.theta * (gtCar - gtCab - C.captivity));
         else if (base === 1) p = TQ.sigmoid(P.theta * (gtRtc - gtCab - 2));
         else p = km > 1.2 ? 0.3 * TQ.sigmoid(P.theta * (gtAct - gtCab - 4)) : 0;
         if (rnd() < p) {
-          if (this.fleet.request(o, d, this.t, zone)) { m.cabFrom[mode === 4 ? 'line' : MODES[base]] += sc; m.cabRevenue += (fare * sc) / C.occupancy; mode = 5; }
+          if (this.fleet.request(o, d, this.t, zone, fare)) {
+            m.cabFrom[mode === 4 ? 'line' : MODES[base]] += sc; mode = 5;
+            gain = Math.max(gain, 0.5 * Math.max(0, gtBase - gtCabGain));
+          }
           else m.cabUnserved += sc;
         }
       }
+      // sans auto : le voyageur prend la moins coûteuse des solutions qui lui restent
+      if (noCar) {
+        const opts = [[gtRtc, 1], [gtAct, 2]];
+        if (lineChoice) opts.push([gtLine, 4]);
+        if (cabOk) opts.push([gtCabNoCar, 5]);
+        opts.sort((x, y) => x[0] - y[0]);
+        for (const [, md] of opts) {
+          if (md === 5) {
+            if (!this.fleet.request(o, d, this.t, cabZone, cabFare)) { m.cabUnserved += sc; continue; }
+            m.cabFrom.auto += sc;
+          }
+          mode = md; break;
+        }
+        m.carFree += sc;
+        if (mode === 1) m.toRtc += sc;
+      }
       m.modes[MODES[mode]] += sc;
+      if (mode >= 4) { m.gainMin += gain * sc; if (base === 1) m.fromRtc += sc; }
       if (mode === 4) {
         m.lineFrom[MODES[base]] += sc;
         const at = Math.floor((this.t + lineChoice.access * 60) / 60);
@@ -325,7 +371,7 @@
         trips: m.trips, avgCrowKm: m.trips ? m.crowKm / m.trips : 0, modes: Object.assign({}, m.modes), carsRemoved: m.carsRemoved,
         carVkm: ns[0].vkm, carVh: ns[0].vh, carDelayH: ns[0].vh - ns[0].vhFree,
         avgSpeed: ns[0].vh > 0 ? ns[0].vkm / ns[0].vh : 0, congestion: ns[0].vhFree > 0 ? ns[0].vh / ns[0].vhFree - 1 : 0,
-        lineFrom: Object.assign({}, m.lineFrom), cabFrom: Object.assign({}, m.cabFrom),
+        lineFrom: Object.assign({}, m.lineFrom), cabFrom: Object.assign({}, m.cabFrom), riderGainH: m.gainMin / 60, fromRtc: m.fromRtc, toRtc: m.toRtc, carFree: m.carFree, cabLane: !!this.cabLane,
       };
       let co2Added = 0;
       if (L) {
@@ -338,9 +384,9 @@
         co2Added += s.vehKm * L.p.co2Km + s.vehKm * L.p.kwhKm * P.gridCO2;
       }
       if (F) {
-        const s = F.stats, empty = ns[1].vkm, loaded = ns[2].vkm;
+        const s = F.stats, empty = ns[1].vkm + s.localEmpty, loaded = ns[2].vkm + s.localLoaded;
         out.cab = {
-          fleet: F.fleetReal, rides: s.ridesPersons, revenue: m.cabRevenue, requests: s.requests * P.scale, unserved: m.cabUnserved, avgWait: s.waitN ? s.waitSum / s.waitN : 0,
+          fleet: F.fleetReal, rides: s.ridesPersons, revenue: s.revenue, rideKm: s.rideKm, ridesDone: s.ridesDone, pooled: s.pooled, speed: ns[1].vh + ns[2].vh > 0 ? (ns[1].vkm + ns[2].vkm) / (ns[1].vh + ns[2].vh) : 0, requests: s.requests * P.scale, unserved: m.cabUnserved, avgWait: s.waitN ? s.waitSum / s.waitN : 0,
           vkmEmpty: empty, vkmLoaded: loaded, emptyShare: empty + loaded > 0 ? empty / (empty + loaded) : 0,
           kwh: (empty + loaded) * F.kwhKm, ridesPerVeh: s.ridesPersons / P.cab.occupancy / F.fleetReal, charges: s.charges * F.w,
         };

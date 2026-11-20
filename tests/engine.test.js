@@ -1,4 +1,4 @@
-// Tests du moteur : node --test tests/
+// Tests du moteur : node --test tests/engine.test.js
 const test = require('node:test');
 const assert = require('node:assert');
 const { TQ, data } = require('./load');
@@ -101,6 +101,113 @@ test('rentabilité : recettes, exploitation et investissement se composent corre
 
 test('les recettes des Cybercab suivent le tarif', () => {
   const s = run({ line: 'none', cab: 'corridor', fleet: 600 }, 4, 5 * 3600).summary();
-  const perRide = s.cab.revenue / (s.cab.rides / TQ.PARAMS.cab.occupancy);
+  const perRide = s.cab.revenue / s.cab.ridesDone;
   assert.ok(perRide > TQ.PARAMS.cab.fareBase && perRide < 40, 'recette par course ' + perRide);
+});
+
+test('Cybercab : recettes et batterie suivent les kilomètres réellement parcourus', () => {
+  const sim = run({ line: 'none', cab: 'wide', fleet: 1500 }, 5, 6 * 3600), F = sim.fleet, C = TQ.PARAMS.cab;
+  const s = sim.summary();
+  // les recettes, les kilomètres et le nombre de courses portent sur les mêmes courses terminées
+  assert.ok(s.cab.ridesDone > 500, 'courses terminées ' + s.cab.ridesDone);
+  assert.ok(Math.abs(s.cab.rides - s.cab.ridesDone * C.occupancy) < 1e-6);
+  const perRide = s.cab.revenue / s.cab.ridesDone, kmPerRide = s.cab.rideKm / s.cab.ridesDone;
+  assert.ok(perRide > C.fareBase + C.farePerKm && perRide < 40, 'recette par course ' + perRide);
+  assert.ok(kmPerRide > 1.5 && kmPerRide < 15, 'km par course ' + kmPerRide);
+  // les odomètres couvrent tous les kilomètres comptés par le réseau et les rues locales
+  let odo = 0;
+  for (let i = 0; i < F.n; i++) { odo += F.odo[i]; assert.ok(F.odo[i] - F.odoCharge[i] <= F.rangeKm + 60); }
+  assert.ok(Math.abs(odo * F.w - (s.cab.vkmEmpty + s.cab.vkmLoaded)) / (odo * F.w) < 0.02, 'odomètres ' + odo * F.w + ' vs ' + (s.cab.vkmEmpty + s.cab.vkmLoaded));
+});
+
+test('bilan pour la société : somme des composantes et rôle de la référence', () => {
+  const s = { elapsedH: 24, scenario: { winter: false }, carVkm: 14e6, carDelayH: 90000, riderGainH: 3000, co2Avoided: 20,
+    lineFrom: { rtc: 40000, auto: 20000, actif: 5000 }, line: { kind: 'tram', boardings: 70000, vehKm: 7000 } };
+  const e = TQ.economics(s), y = e.society, E = TQ.ECON, ref = TQ.REFERENCE.normal;
+  assert.strictEqual(y.riders, 3000 * E.vot);
+  assert.strictEqual(y.co2, 20 * E.carbon);
+  assert.ok(Math.abs(y.rtcLoss + 40000 * E.transitFare) < 1e-6);
+  assert.ok(Math.abs(y.drivers - (ref.delayPerVkm - 90000 / 14e6) * 14e6 * E.carOccupancy * E.vot) < 1e-3);
+  assert.ok(Math.abs(y.net - (e.net + y.riders + y.rtcLoss + y.co2 + y.drivers)) < 1e-6);
+  // le compteur d'usagers venus du RTC, quand il existe, prime sur la somme des provenances
+  assert.ok(Math.abs(TQ.economics(Object.assign({}, s, { fromRtc: 50000 })).society.rtcLoss + 50000 * E.transitFare) < 1e-6);
+  // course partagée : chacun paie moins que le plein tarif sur lequel il a choisi
+  const shared = TQ.economics({ elapsedH: 24, cab: { fleet: 100, rides: 1400, revenue: 9000, vkmEmpty: 0, vkmLoaded: 0, kwh: 0 } });
+  assert.ok(Math.abs(shared.society.riders - 9000 * (E.cabOccupancy - 1)) < 1e-6);
+  assert.ok(Math.abs(e.annual.society.net - y.net * 300) < 1e-2);
+  // sans ligne ni flotte, rien à compter
+  assert.strictEqual(TQ.economics({ elapsedH: 24, carVkm: 14e6, carDelayH: 90000 }).society.net, 0);
+});
+
+test('un voyageur qui change de mode y gagne, selon le modèle', () => {
+  const s = run({ line: 'tram', cab: 'off' }, 3, 6 * 3600).summary();
+  assert.ok(s.riderGainH > 0);
+  // moins de la moitié de vingt minutes par voyageur de la ligne, en moyenne
+  assert.ok((s.riderGainH * 60) / s.modes.line < 10, 'minutes par voyageur ' + (s.riderGainH * 60) / s.modes.line);
+});
+
+test('les usagers venus du RTC sont comptés même quand ils passent par la ligne puis par le Cybercab', () => {
+  const s = run({ line: 'tram', cab: 'wide', fleet: 1500 }, 3, 6 * 3600).summary();
+  assert.ok(s.fromRtc >= s.lineFrom.rtc + s.cabFrom.rtc);
+  assert.ok(s.fromRtc <= s.lineFrom.rtc + s.cabFrom.rtc + s.cabFrom.line);
+});
+
+test('deux journées de suite rejouent la même demande', () => {
+  const sim = new TQ.Simulation(data, { scenario: { line: 'none', cab: 'off' }, start: 4.9 * 3600 + 86400 });
+  sim.step(600);
+  const day2 = sim.day, trips = [];
+  for (let k = 0; k < 2; k++) { sim.reset(TQ.PARAMS.dayStart); sim.day = day2 + k; sim.step(1800); trips.push(sim.summary().trips); }
+  assert.strictEqual(trips[0], trips[1]);
+});
+
+test('courses partagées : des demandes se joignent à des courses en cours, sans perdre de voyageurs', () => {
+  const sim = run({ line: 'none', cab: 'wide', fleet: 1500, pool: true }, 5, 6 * 3600), F = sim.fleet, s = sim.summary();
+  assert.ok(s.cab.pooled > 500, 'voyageurs jumelés ' + s.cab.pooled);
+  assert.ok(s.cab.pooled < 2 * s.cab.requests * F.poolSeat + 1, 'pas plus de jumelages que de sièges libres');
+
+  // l'occupation moyenne ne dépasse pas les deux places du véhicule
+  assert.ok(F.poolSeat <= 1 - TQ.PARAMS.cab.occupancy / TQ.PARAMS.cab.seats + 1e-12);
+  // chaque demande acceptée finit déposée ou est encore en route
+  let pending = 0;
+  for (let i = 0; i < F.n; i++) {
+    for (let q = 0; q < F.ns[i]; q++) if (F.sk[i * 4 + q] & 1) pending++;
+    assert.ok(F.ns[i] <= 4 && F.aboard[i] <= 2);
+    if (F.state[i] === 0 || F.state[i] === 3) assert.strictEqual(F.ns[i], 0);
+  }
+  assert.strictEqual(F.stats.served, Math.round(F.stats.ridesPersons / TQ.PARAMS.scale) + pending);
+  // les véhicules en route correspondent toujours aux agents occupés
+  let onRoad = 0, busy = 0;
+  for (let i = 0; i < sim.net.vn; i++) if (sim.net.vType[i] > 0) { onRoad++; assert.strictEqual(F.idx[sim.net.vPay[i]], i); }
+  for (let i = 0; i < F.n; i++) if ([1, 2, 4].includes(F.state[i])) busy++;
+  assert.strictEqual(onRoad, busy);
+});
+
+test('voie réservée aux Cybercab : plus rapide que les rues le long du tracé, et fermée sans flotte', () => {
+  const sim = run({ line: 'cablane', cab: 'corridor', fleet: 1500 }, 2.5, 6 * 3600), net = sim.net;
+  assert.ok(sim.cabLane && net.cabLane && !sim.line);
+  let lane = 0, faster = 0, flow = 0;
+  for (let e = 0; e < net.E; e++) if (net.ecor[e]) { lane++; flow += net.eflowC[e]; if (net.ecabT[e] < net.ett[e]) faster++; }
+  assert.ok(lane > 100 && faster / lane > 0.8, 'arêtes plus rapides ' + faster + ' sur ' + lane);
+  assert.ok(flow > 0, 'des Cybercab empruntent la voie');
+  for (let e = 0; e < net.E; e++) if (!net.ecor[e]) assert.strictEqual(net.ecabT[e], net.ett[e]);
+  // deux départs identiques donnent le même résultat, même après un bout de simulation
+  const again = run({ line: 'cablane', cab: 'corridor', fleet: 1500 }, 0.5, 6 * 3600); again.reset(6 * 3600); again.step(1800);
+  const fresh = run({ line: 'cablane', cab: 'corridor', fleet: 1500 }, 0.5, 6 * 3600);
+  assert.deepStrictEqual(again.summary().modes, fresh.summary().modes);
+  const eco = TQ.economics(sim.summary());
+  assert.ok(eco.parts.some((p) => p.key === 'lane' && p.capex === TQ.ECON.line.cablane.capex));
+  // sans flotte, la voie n'existe pas pour les Cybercab
+  const off = new TQ.Simulation(data, { scenario: { line: 'cablane', cab: 'off' } });
+  assert.strictEqual(off.cabLane, false);
+  assert.strictEqual(off.net.cond.laneDrop, false);
+  assert.ok(!TQ.economics(off.summary()).parts.length);
+});
+
+test('abandon de l\'auto : les résidents sans auto ne roulent plus en auto', () => {
+  const a = run({ line: 'none', cab: 'wide', fleet: 1500 }, 2, 6 * 3600).summary();
+  const b = run({ line: 'none', cab: 'wide', fleet: 1500, carFree: 0.2 }, 2, 6 * 3600).summary();
+  assert.strictEqual(a.carFree, 0);
+  assert.ok(b.carFree > 0 && b.modes.auto < a.modes.auto - 0.5 * b.carFree, 'auto ' + a.modes.auto + ' -> ' + b.modes.auto);
+  assert.strictEqual(a.trips, b.trips); // même demande
+  assert.ok(b.toRtc > 0 && b.toRtc <= b.carFree);
 });

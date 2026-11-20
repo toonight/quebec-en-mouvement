@@ -4,14 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Québec en mouvement : simulateur tramway, bus et Cybercab</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600&family=Barlow+Semi+Condensed:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/maplibre-gl@5.24.1/dist/maplibre-gl.css" integrity="sha384-uTttxo/aOKbdE5RlD/SPzSDoDmNvGlUYPjONi2MN/b7c9HPSvW07OIuyP7uL6jxK" crossorigin="anonymous">
+<meta name="description" content="Simulateur citoyen du transport à Québec : tramway, bus en voies réservées ou robotaxis, sur le réseau routier réel, avec la rentabilité de chaque scénario.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230c1522'/%3E%3Cpath d='M5 23 C11 23 12 10 18 10 S24 17 28 8' fill='none' stroke='%23ffc83d' stroke-width='3' stroke-linecap='round'/%3E%3Ccircle cx='5' cy='23' r='2.6' fill='%230c1522' stroke='%23ffc83d' stroke-width='2'/%3E%3Ccircle cx='28' cy='8' r='2.6' fill='%230c1522' stroke='%23ffc83d' stroke-width='2'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="fonts/fonts.css">
+<link rel="stylesheet" href="vendor/maplibre-gl.css">
 <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-<div id="map" aria-label="Carte de Québec avec les véhicules simulés"></div>
+<div id="map" role="region" aria-label="Carte de Québec avec les véhicules simulés"></div>
 
 <aside class="panel panel-left" aria-label="Scénario">
   <header class="brand">
@@ -25,6 +25,7 @@
       <button role="radio" data-line="none" aria-checked="false"><span class="swatch sw-none"></span>Rien (aujourd'hui)</button>
       <button role="radio" data-line="tram" aria-checked="true"><span class="swatch sw-tram"></span>Tramway TramCité</button>
       <button role="radio" data-line="bus" aria-checked="false"><span class="swatch sw-bus"></span>Bus en voies réservées</button>
+      <button role="radio" data-line="cablane" aria-checked="false"><span class="swatch sw-cab"></span>Voie réservée aux Cybercab</button>
     </div>
     <p class="hint" id="line-hint"></p>
   </section>
@@ -41,14 +42,17 @@
         <input type="range" id="fleet" min="200" max="20000" step="100" value="3000"></label>
       <label class="slider"><span>Tarif au kilomètre <output id="fare-out"></output></span>
         <input type="range" id="fare" min="0.3" max="2" step="0.1" value="1.2"></label>
-      <p class="hint">Scénario prospectif : aucun robotaxi n'est autorisé au Québec hors projet pilote.</p>
+      <label class="check"><input type="checkbox" id="pool"> Courses partagées : deux voyageurs seuls par véhicule, 20 % de rabais</label>
+      <label class="slider"><span>Résidents qui renoncent à leur auto <output id="carfree-out"></output></span>
+        <input type="range" id="carfree" min="0" max="30" step="1" value="0"></label>
+      <p class="hint">Scénario prospectif : aucun robotaxi n'est autorisé au Québec hors projet pilote. La part de résidents sans auto est une supposition, à vous de la choisir.</p>
     </div>
   </section>
 
   <section>
     <h2>Conditions</h2>
     <label class="check"><input type="checkbox" id="winter"> Journée d'hiver (chaussée, autonomie des batteries)</label>
-    <div class="starts" aria-label="Heure de départ">
+    <div class="starts" role="group" aria-label="Heure de départ">
       <span>Reprendre à</span>
       <button data-start="5">5 h</button><button data-start="7">7 h</button><button data-start="12">midi</button><button data-start="16">16 h</button>
     </div>
@@ -67,9 +71,30 @@
     </ul>
   </section>
 
+  <section>
+    <details id="costs">
+      <summary>Hypothèses de coûts</summary>
+      <p class="hint">Changez un coût : la rentabilité se recalcule tout de suite, sans relancer la journée.</p>
+      <label class="slider"><span>Tramway, investissement <output id="c-tram-out"></output></span>
+        <input type="range" id="c-tram" min="4" max="12" step="0.2"></label>
+      <label class="slider"><span>Voies réservées et bus, investissement <output id="c-bus-out"></output></span>
+        <input type="range" id="c-bus" min="0.4" max="3" step="0.1"></label>
+      <label class="slider"><span>Prix d'un Cybercab <output id="c-veh-out"></output></span>
+        <input type="range" id="c-veh" min="20" max="120" step="2"></label>
+      <label class="slider"><span>Cybercab, exploitation par km <output id="c-km-out"></output></span>
+        <input type="range" id="c-km" min="0.1" max="1" step="0.05"></label>
+      <label class="slider"><span>Taux pour étaler l'investissement <output id="c-taux-out"></output></span>
+        <input type="range" id="c-taux" min="1" max="8" step="0.5"></label>
+      <button class="link" id="costs-reset">Revenir aux valeurs de départ</button>
+    </details>
+  </section>
+
   <footer>
-    <button class="link" id="open-assumptions">Hypothèses et sources</button>
     <button class="link" id="open-compare">Comparer les journées simulées</button>
+    <button class="link" id="open-assumptions">Hypothèses et sources</button>
+    <button class="link" id="share">Copier le lien de ce scénario</button>
+    <button class="link" id="open-welcome">Comment ça marche</button>
+    <p class="hint">Projet citoyen indépendant, sans lien avec la Ville de Québec, CDPQ Infra, le RTC ou Tesla. Ce n'est pas une étude officielle.</p>
   </footer>
 </aside>
 
@@ -110,10 +135,17 @@
       <div><dt>Attente moyenne</dt><dd id="k-cwait">–</dd></div>
       <div><dt>Kilomètres à vide</dt><dd id="k-empty">–</dd></div>
       <div><dt>Demandes sans véhicule</dt><dd id="k-unserved">–</dd></div>
+      <div><dt>Vitesse moyenne</dt><dd id="k-cspeed">–</dd></div>
+      <div id="row-pooled" hidden><dt>Passagers en course partagée</dt><dd id="k-pooled">–</dd></div>
     </dl>
   </section>
   <section id="sec-econ" hidden>
     <h2>Rentabilité depuis le départ</h2>
+    <div class="econ-bars" aria-hidden="true">
+      <div><span>Recettes</span><p><i id="eb-rev" class="rev"></i></p></div>
+      <div><span>Coûts</span><p><i id="eb-opex" class="opex"></i><i id="eb-cap" class="cap"></i></p></div>
+      <small><i class="opex"></i>exploitation <i class="cap"></i>investissement étalé</small>
+    </div>
     <dl class="kpis">
       <div><dt>Recettes des passagers</dt><dd id="k-rev">–</dd></div>
       <div><dt>Coûts d'exploitation</dt><dd id="k-opex">–</dd></div>
@@ -121,6 +153,7 @@
       <div><dt>Résultat avec l'investissement</dt><dd id="k-net">–</dd></div>
     </dl>
     <p class="hint" id="k-capex"></p>
+    <p class="hint">Le bilan pour la société (temps gagné, CO₂) se lit dans la comparaison, une fois la journée terminée.</p>
   </section>
   <section>
     <h2>Climat</h2>
@@ -128,7 +161,7 @@
   </section>
 </aside>
 
-<div class="dock" aria-label="Horloge et vitesse">
+<div class="dock" role="group" aria-label="Horloge et vitesse">
   <div class="clock"><span id="clock">05 h 00</span><small id="day-label">Jour 1</small></div>
   <button id="play" class="play" aria-label="Mettre en pause">❚❚</button>
   <div class="speeds" role="radiogroup" aria-label="Vitesse de la simulation" id="speeds">
@@ -139,10 +172,12 @@
     <button role="radio" data-speed="0" aria-checked="false">Maximum</button>
   </div>
   <figure class="timeline">
-    <canvas id="chart" width="900" height="96" aria-label="Congestion et charge de la ligne au fil de la journée"></canvas>
+    <canvas id="chart" width="900" height="96" role="img" aria-label="Congestion et charge de la ligne au fil de la journée"></canvas>
     <figcaption><span class="key k-cong"></span>Temps perdu en auto <span class="key k-line" id="key-line-swatch"></span><span id="key-line">Charge de la ligne</span></figcaption>
   </figure>
 </div>
+
+<button id="view3d" class="mapbtn" aria-pressed="false">Vue 3D</button>
 
 <div class="status" id="status">Chargement du réseau routier de Québec…</div>
 
@@ -153,15 +188,30 @@
   <div id="assumptions"></div>
 </dialog>
 
+<dialog id="dlg-welcome" class="welcome">
+  <h2>Québec en mouvement</h2>
+  <p class="lead">Que se passe-t-il dans les rues de Québec avec un tramway, un bus en voies réservées ou des robotaxis ? Ce simulateur rejoue une journée de semaine sur le réseau réel pour comparer les trois.</p>
+  <ul>
+    <li><b>Choisissez un scénario</b> dans le panneau de gauche : le mode sur le tracé, puis une flotte de Cybercab si vous voulez.</li>
+    <li><b>Regardez la journée défiler</b> : chaque point pâle représente quatre autos, les rues virent à l'ambre puis au rouge quand elles se chargent.</li>
+    <li><b>Passez en vue 3D</b> (bouton en haut de la carte) pour voir la ville en volume et chaque véhicule sur sa voie.</li>
+    <li><b>Comparez</b> l'achalandage, la rentabilité et le bilan pour la société dans « Comparer les journées simulées ».</li>
+  </ul>
+  <p class="hint">Projet citoyen indépendant, calé sur des données publiques. Ce n'est pas une étude officielle : les hypothèses sont toutes affichées et modifiables.</p>
+  <form method="dialog"><button class="primary" autofocus>Commencer</button></form>
+</dialog>
+
 <dialog id="dlg-compare">
   <form method="dialog"><button class="close" aria-label="Fermer">×</button></form>
   <h2>Journées simulées</h2>
   <p class="lead">Chaque journée complète, simulée de 5 h à 5 h sans changement de scénario, s'ajoute ici. Changez de scénario et laissez tourner à la vitesse maximum pour comparer.</p>
+  <p class="actions"><button class="link" id="run-day">Simuler la journée complète de ce scénario</button>
+    <button class="link" id="run-all">Simuler quatre scénarios types (tramway, bus, voie réservée aux Cybercab, Cybercab seuls)</button></p>
   <div id="compare"></div>
 </dialog>
 
-<script src="https://cdn.jsdelivr.net/npm/maplibre-gl@5.24.1/dist/maplibre-gl.js" integrity="sha384-nXMl9YiLoSG5KBPTFgvxVuIqQQcqIvo0bFrvoEaGJC6r7IibIzF1S36Zbf/sKBtL" crossorigin="anonymous"></script>
-<script src="https://cdn.jsdelivr.net/npm/deck.gl@9.4.1/dist.min.js" integrity="sha384-MgmfghaFhzRlOya+lTLbCWa1NESjFsHp55UTFgT7doYqkH8cvOGK/V8+5SyeryGb" crossorigin="anonymous"></script>
+<script src="vendor/maplibre-gl.js"></script>
+<script src="vendor/deck.gl.min.js"></script>
 <script src="data/network.js"></script>
 <script src="js/engine/core.js"></script>
 <script src="js/engine/network.js"></script>
@@ -169,6 +219,7 @@
 <script src="js/engine/cabs.js"></script>
 <script src="js/engine/sim.js"></script>
 <script src="js/engine/econ.js"></script>
+<script src="js/engine/reference.js"></script>
 <script src="js/assumptions.js"></script>
 <script src="js/app.js"></script>
 </body>
