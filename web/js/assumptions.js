@@ -15,7 +15,7 @@
       `Temps de parcours par tronçon : une loi débit-vitesse de type BPR pour la saturation, plus un retard proportionnel à la charge qui représente les feux et les entrecroisements. Les itinéraires sont recalculés à tour de rôle : toutes les 20 minutes simulées en période de congestion, toutes les 80 minutes sinon.`,
       'Les débits sont majorés de 12 % pour les camions et le transit, absents de l\'enquête.',
       `Calage des débits : sur 109 sections de comptage du ${a('https://www.donneesquebec.ca/recherche/dataset/debit-de-circulation', 'ministère des Transports')}, le débit journalier simulé vaut en médiane 1,1 fois le débit mesuré.`,
-      `Calage de la congestion : le temps perdu simulé est de 40 % sur la journée, 58 % à la pointe du matin et 72 % à celle du soir. L'${a('https://www.tomtom.com/traffic-index/', 'indice TomTom')} mesure 41 %, 55 % et 77 % à Québec.`,
+      `Calage de la congestion : le temps perdu simulé est de 39 % sur la journée, 58 % à la pointe du matin et 71 % à celle du soir. L'${a('https://www.tomtom.com/traffic-index/', 'indice TomTom')} mesure 41 %, 55 % et 77 % à Québec.`,
       'Quand la ligne structurante existe, une voie par sens est retirée aux autos sur les rues qui longent le tracé en surface.',
     ] },
     { title: 'Tramway TramCité', items: [
