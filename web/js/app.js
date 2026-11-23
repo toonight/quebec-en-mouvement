@@ -49,7 +49,8 @@
 
   /** Un seul mode sur le tracé : rien (line none, cab off), tramway ou autobus (sans flotte), ou Cybercab
    *  (line none, flotte le long du tracé ou sur le réseau élargi, dans la circulation générale).
-   *  Une ligne et une flotte ne roulent jamais ensemble : la ligne l'emporte. */
+   *  Une ligne et une flotte ne roulent jamais ensemble : la ligne l'emporte. Le moteur refuse d'ailleurs le mélange
+   *  (une erreur) : le lien, les choix de mode, restart() et runBatch passent par ici. */
   function exclusive(sc) {
     if (sc.line !== 'none') sc.cab = 'off';
     return sc;
@@ -1188,7 +1189,20 @@
     }
     $('sec-econ').hidden = !L && !F;
     if (L || F) {
-      const e = TQ.economics(s);
+      // cumul des journées enchaînées depuis le dernier départ, journée en cours comprise (la fin de journée à 5 h ne le
+      // coupe pas) ; recalculé à chaque affichage, donc avec les coûts en vigueur
+      const runList = sim.runSummaries(), e = TQ.economicsTotal(runList);
+      const since = 'depuis le dernier changement de scénario, la dernière reprise (« Reprendre à ») ou le dernier calcul de journée';
+      // le texte suit les journées gardées par le moteur (sim.run), pas seulement e.days : à 5 h pile la journée en cours
+      // est vide mais le cumul contient déjà la journée qui vient de finir
+      if (!sim.run.length) setText('k-days', `Journée en cours seulement, ${since}. Le cumul se poursuit après 5 h.`);
+      else {
+        const first = sim.run[0], hours = runList.reduce((a, s) => a + s.elapsedH, 0);
+        const partial = first.elapsedH < 24 - 1e-6;
+        const start = TQ.formatClock(Math.round((first.t - first.elapsedH * 3600) / 600) * 600).replace(' h 00', ' h');
+        setText('k-days', `Cumul ${e.days > 1 ? `de ${fmt.format(e.days)} journées entamées` : 'd\'une journée'}, soit ${fmt.format(Math.round(hours))} h simulées`
+          + `${partial ? ` (la première commencée à ${start})` : ''}, ${since}.`);
+      }
       kpi('k-rev', ...money(e.revenue)); kpi('k-opex', ...money(e.opex));
       kpi('k-oper', ...money(e.operating)); kpi('k-net', ...money(e.net));
       // recettes face aux coûts, à la même échelle
@@ -1407,7 +1421,7 @@
       const next = () => {
         if (state.batch !== batch) return done();
         if (!batch.queue.length) return done();
-        Object.assign(sim.scenario, batch.queue.shift());
+        exclusive(Object.assign(sim.scenario, batch.queue.shift()));
         sim.reset(TQ.PARAMS.dayStart);
         const n = sim.history.length, rank = batch.total - batch.queue.length;
         const chunk = () => {

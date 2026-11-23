@@ -299,10 +299,103 @@ test('un voyageur qui change de mode y gagne, selon le modèle', () => {
   assert.ok((s.riderGainH * 60) / s.modes.line < 10, 'minutes par voyageur ' + (s.riderGainH * 60) / s.modes.line);
 });
 
-test('les usagers venus du RTC sont comptés même quand ils passent par la ligne puis par le Cybercab', () => {
-  const s = run({ line: 'tram', cab: 'wide', fleet: 1500 }, 3, 6 * 3600).summary();
-  assert.ok(s.fromRtc >= s.lineFrom.rtc + s.cabFrom.rtc);
-  assert.ok(s.fromRtc <= s.lineFrom.rtc + s.cabFrom.rtc + s.cabFrom.line);
+test('les usagers venus du RTC sont comptés pour le mode qui les prend, ligne ou Cybercab', () => {
+  // un seul mode à la fois : le compteur des usagers venus du RTC est celui de la ligne, ou celui de la flotte
+  const tram = run({ line: 'tram', cab: 'off' }, 3, 6 * 3600).summary();
+  assert.ok(tram.lineFrom.rtc > 0);
+  assert.strictEqual(tram.fromRtc, tram.lineFrom.rtc);
+  assert.strictEqual(tram.cabFrom.rtc + tram.cabFrom.line, 0);
+  const cab = run({ line: 'none', cab: 'wide', fleet: 1500 }, 3, 6 * 3600).summary();
+  assert.ok(cab.cabFrom.rtc > 0);
+  assert.strictEqual(cab.fromRtc, cab.cabFrom.rtc);
+  assert.strictEqual(cab.lineFrom.rtc, 0);
+  assert.strictEqual(cab.cabFrom.line, 0, 'plus aucun voyageur ne passe de la ligne au Cybercab');
+});
+
+test('un seul mode : le moteur refuse une ligne avec une flotte, au constructeur, à reset et à setScenario', () => {
+  const mixed = /Scénario refusé : une ligne .* et une flotte de Cybercab/;
+  for (const line of ['tram', 'bus']) for (const cab of ['corridor', 'wide']) {
+    assert.throws(() => new TQ.Simulation(data, { scenario: { line, cab, fleet: 500 } }), mixed, `${line} + ${cab}`);
+  }
+  const sim = new TQ.Simulation(data, { scenario: { line: 'tram', cab: 'off' }, start: 7 * 3600 });
+  sim.step(600);
+  const before = JSON.stringify(sim.summary()), scenario = JSON.stringify(sim.scenario), resets = sim.resets;
+  // setScenario vérifie le scénario fusionné avant de le poser : un refus laisse tout en place
+  assert.throws(() => sim.setScenario({ cab: 'wide' }), mixed);
+  assert.strictEqual(JSON.stringify(sim.scenario), scenario, 'scénario inchangé après le refus');
+  assert.strictEqual(JSON.stringify(sim.summary()), before, 'simulation inchangée après le refus');
+  assert.strictEqual(sim.resets, resets);
+  sim.step(600);
+  assert.strictEqual(sim.t, 7 * 3600 + 1200, 'la simulation continue');
+  // un scénario mêlé posé à la main est refusé par reset, sans remise à zéro
+  sim.scenario.cab = 'corridor';
+  const t = sim.t;
+  assert.throws(() => sim.reset(7 * 3600), mixed);
+  assert.strictEqual(sim.t, t);
+  assert.strictEqual(sim.resets, resets);
+  // ... et par la fin de journée, avant de toucher à history, day ou run (sinon chaque pas suivant la rejouerait)
+  const day = sim.day, nHist = sim.history.length, nRun = sim.run.length;
+  assert.throws(() => sim.endDay(), mixed);
+  assert.deepStrictEqual([sim.day, sim.history.length, sim.run.length, sim.t], [day, nHist, nRun, t]);
+  sim.scenario.cab = 'off';
+  // passer d'un mode à l'autre en une fois reste permis
+  sim.setScenario({ line: 'none', cab: 'corridor', fleet: 500 });
+  assert.ok(sim.fleet && !sim.line);
+  assert.throws(() => sim.setScenario({ line: 'bus' }), mixed);
+  assert.strictEqual(sim.scenario.line, 'none');
+  sim.setScenario({ line: 'bus', cab: 'off' });
+  assert.ok(sim.line && !sim.fleet);
+  // l'ancienne voie « cablane » devient line none avant la vérification : elle reste acceptée avec une flotte
+  const old = new TQ.Simulation(data, { scenario: { line: 'cablane', cab: 'wide', fleet: 500 } });
+  assert.strictEqual(old.scenario.line, 'none');
+  assert.ok(old.fleet && !old.line);
+  sim.setScenario({ line: 'cablane', cab: 'corridor' });
+  assert.strictEqual(sim.scenario.line, 'none');
+  assert.ok(sim.fleet && !sim.line);
+});
+
+test('rentabilité cumulée : les journées enchaînées s\'additionnent, une remise à zéro repart de rien', () => {
+  const sim = new TQ.Simulation(data, { scenario: { line: 'tram', cab: 'off' } });
+  assert.strictEqual(sim.run.length, 0);
+  assert.strictEqual(sim.runSummaries().length, 1);
+  while (!sim.history.length) sim.step(10);
+  // la fin de journée ne vide pas la liste : elle y ajoute la journée qui finit
+  assert.strictEqual(sim.run.length, 1);
+  assert.strictEqual(sim.run[0], sim.history[0]);
+  for (let i = 0; i < 2 * 360; i++) sim.step(10);
+  const list = sim.runSummaries();
+  assert.strictEqual(list.length, 2);
+  // seuls des résumés sont gardés, pas l'état du moteur
+  for (const s of sim.run) assert.ok(!(s instanceof TQ.Simulation) && s.elapsedH > 0 && JSON.parse(JSON.stringify(s)).trips === s.trips);
+  const d1 = TQ.economics(sim.history[0]), cur = TQ.economics(sim.summary()), tot = TQ.economicsTotal(list);
+  assert.ok(Math.abs(list[1].elapsedH - 2) < 1e-9);
+  for (const k of ['revenue', 'opex', 'capital', 'operating', 'net', 'riders']) {
+    assert.ok(Math.abs(tot[k] - (d1[k] + cur[k])) < 1e-6 * Math.max(1, Math.abs(tot[k])), k + ' : ' + tot[k] + ' contre ' + (d1[k] + cur[k]));
+    assert.ok(Math.abs(tot.parts[0][k] - (d1.parts[0][k] + cur.parts[0][k])) < 1e-6 * Math.max(1, Math.abs(tot[k])), 'partie ' + k);
+  }
+  assert.ok(cur.revenue > 0 && tot.revenue > d1.revenue);
+  assert.strictEqual(tot.capex, d1.capex);
+  assert.strictEqual(tot.days, 2);
+  assert.deepStrictEqual(tot.parts.map((p) => p.kind), ['tram']);
+  // d'autres hypothèses de coût : le cumul se recalcule à partir des mêmes résumés
+  const E = JSON.parse(JSON.stringify(TQ.ECON)); E.line.tram.opexKm *= 2;
+  const dear = TQ.economicsTotal(list, E);
+  assert.ok(Math.abs(dear.opex - (TQ.economics(list[0], E).opex + TQ.economics(list[1], E).opex)) < 1e-6 && dear.opex > tot.opex);
+  // changement de scénario, saut dans le temps ou remise à zéro : la liste repart de rien
+  sim.setScenario({ winter: true });
+  assert.strictEqual(sim.run.length, 0);
+  sim.step(600);
+  sim.reset(TQ.PARAMS.dayStart);
+  assert.strictEqual(sim.run.length, 0);
+  // une journée partielle (partie de 3 h) compte dans le cumul, sans entrer dans la comparaison
+  const part = new TQ.Simulation(data, { scenario: { line: 'none', cab: 'corridor', fleet: 500 }, start: TQ.PARAMS.dayStart + 86400 - 3600 });
+  part.step(3600 + 600);
+  assert.strictEqual(part.history.length, 0);
+  assert.strictEqual(part.run.length, 1);
+  assert.ok(Math.abs(part.run[0].elapsedH - 1) < 1e-9);
+  assert.strictEqual(TQ.economicsTotal(part.runSummaries()).days, 2);
+  // liste vide : rien
+  assert.strictEqual(TQ.economicsTotal([]).net, 0);
 });
 
 test('deux journées de suite rejouent la même demande', () => {

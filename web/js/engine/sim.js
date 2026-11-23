@@ -12,6 +12,13 @@
   // La page, elle, ajoute une flotte le long du tracé à un ancien lien « ligne=cablane » sans flotte (app.js, readHash).
   const compatLine = (sc) => { if (sc.line === 'cablane') sc.line = 'none'; };
 
+  // un seul mode à la fois sur le tracé : une ligne (tramway ou bus) et une flotte de Cybercab ne roulent jamais ensemble
+  const checkSingleMode = (sc) => {
+    if ((sc.line === 'tram' || sc.line === 'bus') && sc.cab !== 'off') {
+      throw new Error(`Scénario refusé : une ligne (${sc.line === 'tram' ? 'tramway' : 'bus'}) et une flotte de Cybercab (cab '${sc.cab}') ne peuvent pas rouler ensemble. Choisissez un seul mode : la ligne avec cab 'off', ou la flotte avec line 'none'.`);
+    }
+  };
+
   class Simulation {
     constructor(data, opts) {
       opts = opts || {};
@@ -19,9 +26,11 @@
       this.P = TQ.PARAMS;
       this.seed = opts.seed || 20261119;
       this.net = new TQ.Network(data, { trees: false });
-      // line : none | tram | bus ; cab : off | corridor | wide (la flotte roule avec les autos) ;
+      // line : none | tram | bus ; cab : off | corridor | wide (la flotte roule avec les autos) ; un seul mode à la fois :
+      // une ligne (tram, bus) va avec cab 'off', une flotte avec line 'none' (un mélange est refusé, voir checkSingleMode) ;
       // pool : courses partagées ; carFree : part des déplacements automobiles des personnes qui habitent la zone desservie faits sans auto (tirage par déplacement)
       this.scenario = Object.assign({ line: 'none', cab: 'off', fleet: 3000, farePerKm: this.P.cab.farePerKm, winter: false, pool: false, carFree: 0, auto: false }, opts.scenario || {});
+      compatLine(this.scenario); checkSingleMode(this.scenario); // refus avant toute préparation
       this.history = [];
       this.day = 1;
       this.prepareDemand();
@@ -125,9 +134,11 @@
 
     // ------------------------------------------------------------------ état
     reset(start) {
-      this.resets = (this.resets || 0) + 1; // l'affichage s'en sert pour oublier les véhicules de la journée précédente
       const sc = this.scenario, P = this.P;
-      compatLine(sc);
+      compatLine(sc); checkSingleMode(sc); // un scénario refusé ne touche pas à l'état
+      this.resets = (this.resets || 0) + 1; // l'affichage s'en sert pour oublier les véhicules de la journée précédente
+      // journées enchaînées depuis le dernier départ : toute remise à zéro les oublie (endDay les remet ensuite)
+      this.run = [];
       // flux aléatoires indépendants : la demande tirée ne dépend pas du scénario
       // et chaque journée rejoue le même tirage : les journées comparées, et la référence, ont la même demande
       this.rndDemand = TQ.rng(this.seed + 7919);
@@ -159,6 +170,8 @@
       this.flowAcc = 0; this.treeAcc = 0; this.seriesAcc = 0;
       this.m = {
         trips: 0, modes: { auto: 0, rtc: 0, actif: 0, autre: 0, line: 0, cab: 0 },
+        // (cabFrom.line, carFreeModes.line et carFreeKm.line restent à 0 depuis qu'une ligne et une flotte ne roulent plus
+        // ensemble ; ils sont gardés pour que le résumé garde la même forme)
         lineFrom: { auto: 0, rtc: 0, actif: 0 }, cabFrom: { auto: 0, rtc: 0, actif: 0, line: 0 },
         carsRemoved: 0, divertedCarKm: 0, local: 0, cabUnserved: 0, crowKm: 0, gainMin: 0, fromRtc: 0, toRtc: 0, carFree: 0,
         // déplacements faits sans auto : écart net de coût généralisé avec l'auto (minutes), puis modes de repli et kilomètres
@@ -171,6 +184,9 @@
     }
 
     setScenario(cfg) {
+      // vérifié sur une copie : un scénario refusé laisse la simulation intacte
+      const next = Object.assign({}, this.scenario, cfg);
+      compatLine(next); checkSingleMode(next);
       Object.assign(this.scenario, cfg);
       this.reset(this.t);
     }
@@ -249,10 +265,21 @@
     }
 
     endDay() {
+      checkSingleMode(this.scenario); // un mélange posé à la main est refusé avant de toucher à history, day ou run
+      const s = this.summary();
       // seules les journées complètes (5 h à 5 h) entrent dans la comparaison
-      if (this.tDayStart <= this.P.dayStart + 1) { this.history.push(this.summary()); this.lastDayFlows = this.net.eday.slice(); }
+      if (this.tDayStart <= this.P.dayStart + 1) { this.history.push(s); this.lastDayFlows = this.net.eday.slice(); }
+      // le cumul depuis le départ, lui, garde aussi une journée partielle : la fin de journée ne le coupe pas
+      const run = this.run.concat([s]);
       this.day++;
       this.reset(this.P.dayStart + 0);
+      this.run = run;
+    }
+
+    /** Résumés des journées enchaînées depuis le dernier départ (changement de scénario, saut dans le temps,
+     *  remise à zéro), journée en cours comprise, en dernier. Seuls des résumés sont gardés. */
+    runSummaries() {
+      return this.run.concat([this.summary()]);
     }
 
     // ------------------------------------------------------------------ demande et choix modal
@@ -324,7 +351,7 @@
           if (co[x].feeder && cd[y].feeder) gt += 8;
           if (gt < gtLine) { gtLine = gt; lineChoice = { i, j, access: co[x].t }; }
         }
-        if (lineChoice && !noCar) {
+        if (lineChoice) {
           let p = 0;
           if (base === 1) p = TQ.sigmoid(P.theta * (gtRtc - gtLine + lp.bonus));
           else if (base === 0) p = TQ.sigmoid(P.theta * (gtCar - gtLine + lp.bonus - P.carCaptivity));
@@ -339,7 +366,7 @@
         const C = P.cab, zone = A.zone < 0 ? 0 : A.zone, pool = this.scenario.pool;
         // course partagée : rabais sur le prix, contre un détour possible
         const fare = (C.fareBase + this.scenario.farePerKm * km) * (pool ? 1 - C.poolDiscount : 1);
-        const vot = mode === 4 || base === 1 ? P.votTransit : P.vot;
+        const vot = base === 1 ? P.votTransit : P.vot;
         // temps à bord : celui d'une auto, la flotte roule dans la même circulation
         const tCab = tCar + (pool ? C.poolPerceivedMin : 0);
         const waitCab = P.waitWeight * this.fleet.perceivedWait(zone);
@@ -352,14 +379,12 @@
         cabFullCost = gtCabGain;
         let p;
         if (noCar) p = 0; else
-        if (mode === 4) p = TQ.sigmoid(P.theta * (gtLine - gtCab - 2));
-        else if (base === 0) p = TQ.sigmoid(P.theta * (gtCar - gtCab - C.captivity));
+        if (base === 0) p = TQ.sigmoid(P.theta * (gtCar - gtCab - C.captivity));
         else if (base === 1) p = TQ.sigmoid(P.theta * (gtRtc - gtCab - 2));
         else p = km > 1.2 ? 0.3 * TQ.sigmoid(P.theta * (gtAct - gtCab - 4)) : 0;
         if (rnd() < p) {
           if (this.fleet.request(o, d, this.t, zone, fare)) {
-            m.cabFrom[mode === 4 ? 'line' : MODES[base]] += sc; mode = 5;
-            // gain du mode finalement pris, y compris pour qui était d'abord passé à la ligne
+            m.cabFrom[MODES[base]] += sc; mode = 5;
             gain = 0.5 * Math.max(0, gtBase - gtCabGain);
           }
           else m.cabUnserved += sc;
@@ -373,7 +398,6 @@
         const N = P.noCar, r2 = this.rndNoCar;
         const opts = [[gtRtc, 1, 'rtc', 0], [(km * 1000) / P.walkSpeed, 2, 'walk', 0]];
         if (r2() < N.bikeShare * (this.scenario.winter ? N.bikeWinterFactor : 1)) opts.push([(km / N.bikeSpeedKmh) * 60, 2, 'bike', 0]);
-        if (lineChoice) opts.push([gtLine, 4, 'line', 0]);
         if (cabOk) opts.push([cabChoiceNoCar, 5, 'cab', 0]);
         let pick = null;
         while (!pick) {

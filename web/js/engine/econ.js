@@ -94,4 +94,26 @@
     };
     return out;
   };
+
+  /** Rentabilité cumulée de l'exploitant sur plusieurs journées enchaînées du même scénario (Simulation.runSummaries()).
+   *  Additionne recettes, exploitation, investissement étalé, résultats et voyageurs de chaque journée, au total et par
+   *  partie ; l'investissement (capex) et les parties sont ceux du scénario (dernière journée). days : journées entamées. */
+  TQ.economicsTotal = function (list, E) {
+    const keys = ['riders', 'revenue', 'opex', 'capital', 'operating', 'net'];
+    const out = { parts: [], capex: 0, days: 0, riders: 0, revenue: 0, opex: 0, capital: 0, operating: 0, net: 0 };
+    if (!list || !list.length) return out;
+    const all = list.map((s) => TQ.economics(s, E)), last = all[all.length - 1];
+    out.capex = last.capex;
+    out.parts = last.parts.map((p) => {
+      const q = { key: p.key, kind: p.kind, capex: p.capex };
+      for (const k of keys) q[k] = 0;
+      return q;
+    });
+    list.forEach((s, i) => {
+      if (s.elapsedH > 0) out.days++;
+      for (const k of keys) out[k] += all[i][k];
+      for (const p of all[i].parts) { const q = out.parts.find((x) => x.key === p.key); if (q) for (const k of keys) q[k] += p[k]; }
+    });
+    return out;
+  };
 })();

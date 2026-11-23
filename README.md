@@ -158,7 +158,7 @@ Le dossier `web/` est un site statique : il se publie tel quel, par exemple sur 
   Pour chaque journée avec des déplacements faits sans auto, la comparaison affiche aussi le bilan annuel
   du même scénario à 0 % et l’écart entre les deux. La journée à 0 % est réutilisée ou calculée en arrière-plan.
 - **Déplacements faits sans auto** : le bilan pour la société a un poste à part pour ces voyageurs, qui n'ont
-  pas choisi leur nouveau mode (autobus, marche, vélo, ligne ou Cybercab). Il compte ce qu'ils gagnent ou
+  pas choisi leur nouveau mode (autobus, marche, vélo ou Cybercab). Il compte ce qu'ils gagnent ou
   perdent en temps et en argent par rapport à l'auto. Le gain des voyageurs ne compte que ceux qui ont choisi de changer.
 - **Cybercab (sans ligne)** : choisir ce mode, ou une zone de flotte, retire la ligne. La flotte roule
   dans la circulation générale, avec les autos, le long du tracé ou sur le réseau élargi.
@@ -204,6 +204,7 @@ node tests/make_reference.js
 - `cab_study.js <flotte> <tarif au km> [forfait] [none|tram|bus] [off|corridor|wide]` :
   autos retirées, provenance des passagers et congestion. `HOURLY=1` ajoute le détail par
   heure, `POOL=1` les courses partagées, `CARFREE=0.1` dix pour cent des déplacements automobiles de la zone desservie faits sans auto.
+  Un seul mode à la fois : une ligne (`tram`, `bus`) va avec `off`, une flotte avec `none`.
 - `make_reference.js` : régénère `web/js/engine/reference.js`, la journée de référence qui
   sert au calcul du temps des automobilistes. À relancer après tout changement du moteur.
 

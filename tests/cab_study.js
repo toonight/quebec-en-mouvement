@@ -1,9 +1,16 @@
 // Étude des Cybercab : combien d'autos une flotte retire-t-elle, et à partir de quel tarif la congestion baisse ?
 // Usage : node tests/cab_study.js <flotte> <tarif au km> [forfait] [none|tram|bus] [off|corridor|wide]
 //   HOURLY=1 ajoute le détail heure par heure. POOL=1 : courses partagées. CARFREE=0.1 : 10 % des déplacements auto de la zone desservie faits sans auto.
-//   Le Cybercab seul sur le tracé se choisit avec la ligne « none ».
+//   Le Cybercab seul sur le tracé se choisit avec la ligne « none ». Un seul mode à la fois : une ligne (tram, bus)
+//   ne se combine pas avec une flotte, il faut alors la zone « off ».
 const { TQ, data } = require('./load');
 const [fleet = '1500', perKm = '1.2', base = '3.5', line = 'none', cab = 'wide'] = process.argv.slice(2);
+if ((line === 'tram' || line === 'bus') && cab !== 'off') {
+  console.error(`Une ligne (${line}) et une flotte (${cab}) ne roulent pas ensemble : un seul mode à la fois.
+Usage : node tests/cab_study.js <flotte> <tarif au km> [forfait] none [corridor|wide]   (Cybercab seul)
+        node tests/cab_study.js <flotte> <tarif au km> [forfait] [tram|bus] off      (ligne seule)`);
+  process.exit(2);
+}
 TQ.PARAMS.cab.fareBase = +base;
 const sim = new TQ.Simulation(data, { scenario: { line, cab, fleet: +fleet, farePerKm: +perKm, pool: !!process.env.POOL, carFree: +(process.env.CARFREE || 0) } });
 const hours = [];
@@ -25,7 +32,7 @@ const M = (v) => (v == null ? '–' : (v / 1e6).toFixed(0));
 console.log(JSON.stringify({
   scenario: s.label, tarif: `${base} $ + ${perKm} $/km`,
   passagers: Math.round(s.cab ? s.cab.rides : 0), sansVehicule: Math.round(s.cab ? s.cab.unserved : 0), aVide: s.cab ? Math.round(s.cab.emptyShare * 100) + ' %' : '–',
-  autosRetirees: Math.round(s.carsRemoved), deAuto: Math.round(s.cabFrom.auto), deRtc: Math.round(s.cabFrom.rtc), deActif: Math.round(s.cabFrom.actif), deLigne: Math.round(s.cabFrom.line),
+  autosRetirees: Math.round(s.carsRemoved), deAuto: Math.round(s.cabFrom.auto), deRtc: Math.round(s.cabFrom.rtc), deActif: Math.round(s.cabFrom.actif),
   vkmAuto: Math.round(s.carVkm / 1000), vkmCab: Math.round(s.cab ? (s.cab.vkmEmpty + s.cab.vkmLoaded) / 1000 : 0), vkmRoute: Math.round(s.roadVkm / 1000),
   partages: Math.round(s.cab ? s.cab.pooled : 0), sansAuto: Math.round(s.carFree || 0), vitesseCab: cabSpeed, montees: Math.round(s.line ? s.line.boardings : 0),
   congJour: Math.round(s.congestion * 100), congMatin: mean(7, 9), congSoir: mean(16, 18), vitesse: +s.avgSpeed.toFixed(1),
