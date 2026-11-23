@@ -56,10 +56,10 @@ coûts par défaut, hors hiver, sans déplacements imposés sans auto et sans co
 |---|---:|---:|---:|---:|
 | Tramway | 75 570 | −372,6 | −367,9 | 30,8 |
 | Autobus en voies réservées | 56 740 | −73,6 | −79,2 | 10,4 |
-| Cybercab, corridor, 500 véhicules | 26 030 | +22,2 | +29,0 | 5,3 |
-| Cybercab, réseau élargi, 1 500 véhicules | 52 035 | +46,8 | +71,1 | 14,0 |
-| Cybercab, réseau élargi, 3 000 véhicules | 58 895 | +36,1 | +63,8 | 16,6 |
-| Cybercab, réseau élargi, 6 000 véhicules | 64 040 | −0,4 | +34,4 | 18,7 |
+| Cybercab, corridor, 500 véhicules | 26 030 | +21,9 | +28,8 | 5,3 |
+| Cybercab, réseau élargi, 1 500 véhicules | 52 035 | +46,4 | +70,7 | 14,0 |
+| Cybercab, réseau élargi, 3 000 véhicules | 58 895 | +31,2 | +58,9 | 16,6 |
+| Cybercab, réseau élargi, 6 000 véhicules | 64 040 | −14,5 | +20,4 | 18,7 |
 
 Les passagers sont les montées sur la ligne pour le tramway et les autobus, et les passagers
 transportés pour les Cybercab. Les montants sont en millions de dollars canadiens par an, sur
@@ -74,14 +74,35 @@ Avant l’investissement, leur exploitation est légèrement positive.
 - Autobus : 1,4 G$ étalés sur 30 ans font 81 M$ par an, pour 43 M$ de recettes et 36 M$
   d’exploitation (+7 M$ par an avant l’investissement).
 
-Les Cybercab, aux coûts visés par Tesla, sont rentables pour l’exploitant jusqu’à 3 000 véhicules.
-Sans voie à construire, l’investissement se limite à la flotte : 50 000 $ par véhicule (recharge
-et dépôt compris) sur 5 ans, soit environ 11 200 $ par véhicule et par an.
-- Corridor, 500 véhicules : 37 M$ de recettes, 9 M$ d’exploitation et 6 M$ d’investissement par an.
+Les Cybercab, au prix annoncé par Tesla et aux coûts de dépôt et de recharge estimés, sont rentables pour l’exploitant jusqu’à 3 000 véhicules.
+Sans voie à construire, l’investissement porte sur quatre postes, chacun étalé sur sa durée de vie :
+les véhicules (42 000 $ chacun, 5 ans), les bornes (125 000 $ chacune, 10 ans), le raccordement
+électrique (300 $ par kW de bornes, 40 ans) et les dépôts (terrain, stationnement sur 20 ans et
+bâtiment sur 40 ans). Le nombre de bornes vient de la simulation : la pointe de véhicules en
+recharge au même moment, plus 20 %.
+
+| Scénario Cybercab | Véhicules | Bornes | Raccordement | Dépôts | Investissement total |
+|---|---:|---:|---:|---:|---:|
+| Corridor, 500 véhicules | 21,0 M$ | 18 bornes, 2,3 M$ | 0,8 M$ | 1 dépôt, 13,9 M$ | 37,9 M$ |
+| Réseau élargi, 3 000 véhicules | 126,0 M$ | 30 bornes, 3,8 M$ | 1,4 M$ | 1 dépôt, 83,2 M$ | 214,3 M$ |
+
+Le nombre de bornes est probablement sous-estimé : 1 borne pour 100 véhicules à 3 000 véhicules,
+alors que l’étude des taxis de New York de 2013 en recommandait 1 pour 13 (voir les limites).
+
+Les dépôts pèsent lourd à l’achat (environ 27 700 $ par véhicule), mais s’étalent sur 20 à 40 ans.
+L’investissement étalé reste donc proche de l’ancien forfait : environ 11 100 $ par véhicule et
+par an à 3 000 véhicules. L’exploitation compte à part l’électricité au tarif M d’Hydro-Québec
+(avec la prime de puissance), l’entretien des bornes, la supervision à distance, le nettoyage et les
+taxes foncières du dépôt. La supervision à distance (1 agent pour 40 véhicules) est comptée sur les
+seules heures de roulage, une hypothèse : comptée sur toute la flotte en service, elle coûterait
+environ 16 M$ par an au lieu de 2,4 M$ à 3 000 véhicules. Les sources et les hypothèses de chaque poste sont dans l’application,
+sous « Hypothèses et sources ».
+- Corridor, 500 véhicules : 37 M$ de recettes, 10 M$ d’exploitation et 6 M$ d’investissement par an.
 - Réseau élargi, 1 500 véhicules : 90 M$ de recettes, 26 M$ d’exploitation et 17 M$ d’investissement,
   le meilleur résultat des quatre.
 - Au-delà, les passagers augmentent peu (+13 % de 1 500 à 3 000 véhicules, +9 % de 3 000 à 6 000)
-  alors que l’investissement double à chaque fois : 34 M$ par an à 3 000 véhicules, 67 M$ à 6 000.
+  alors que l’investissement double à chaque fois : 33 M$ par an à 3 000 véhicules, 66 M$ à 6 000,
+  et l’exploitation passe de 38 à 61 M$ par an.
 
 Pour la société, les Cybercab font perdre du temps aux automobilistes (de 8 à 13 M$ par an) :
 ils roulent dans les mêmes rues, et une partie de leurs kilomètres se fait à vide. Le tramway et
@@ -97,13 +118,13 @@ Dans les deux cas, la course rapporte 15,50 $ à l’exploitant.
 
 | Scénario Cybercab | Passagers par jour, prix entier | Passagers par jour, prix par occupant | Exploitant, prix entier (M$/an) | Exploitant, prix par occupant (M$/an) |
 |---|---:|---:|---:|---:|
-| Corridor, 500 véhicules | 26 030 | 37 720 | +22,2 | +41,2 |
-| Réseau élargi, 1 500 véhicules | 52 035 | 86 430 | +46,8 | +122,4 |
-| Réseau élargi, 3 000 véhicules | 58 895 | 110 285 | +36,1 | +145,1 |
+| Corridor, 500 véhicules | 26 030 | 37 720 | +21,9 | +41,7 |
+| Réseau élargi, 1 500 véhicules | 52 035 | 86 430 | +46,4 | +126,3 |
+| Réseau élargi, 3 000 véhicules | 58 895 | 110 285 | +31,2 | +149,1 |
 
 Choisi au prix par occupant, le Cybercab attire de 45 à 87 % de passagers en plus et son résultat
-pour l’exploitant est de 1,9 à 4 fois plus élevé. Avec ce choix, 3 000 véhicules font mieux
-que 1 500 (+145,1 contre +122,4 M$ par an) : la demande, plus forte, occupe la flotte plus grande.
+pour l’exploitant est de 1,9 à 4,8 fois plus élevé. Avec ce choix, 3 000 véhicules font mieux
+que 1 500 (+149,1 contre +126,3 M$ par an) : la demande, plus forte, occupe la flotte plus grande.
 Cette sensibilité au prix perçu s’ajoute à l’incertitude sur les coûts d’exploitation des Cybercab,
 qui suivent les cibles de Tesla.
 
@@ -234,6 +255,14 @@ Limites :
 - Le réseau d'autobus actuel du RTC n'est pas animé et son service ne s'ajuste pas.
 - Les coûts des Cybercab suivent les cibles de Tesla, qui ne sont pas démontrées en
   exploitation. Aucun robotaxi n'est autorisé au Québec hors projet pilote.
+- Plusieurs coûts des dépôts et de la recharge des Cybercab sont des hypothèses : raccordement
+  électrique, durée de vie des bornes, surface bâtie, temps de nettoyage, salaire des agents de
+  supervision. Le coût des bornes vient d'études américaines (2013 et 2019). La journée simulée
+  part de batteries chargées de 50 à 100 % : elle compte moins de recharges qu'en régime établi,
+  et le nombre de bornes est probablement sous-estimé. La pointe de recharge ne tient qu'à
+  quelques véhicules simulés (chacun en représente environ 3,6). Les bornes et la prime de
+  puissance viennent d'une journée hors hiver : un jour d'hiver demande environ 45 % de bornes en
+  plus (26 au lieu de 18 dans le corridor avec 500 véhicules).
 - Les coûts d'exploitation du tramway et l'investissement du bus en voies réservées sont des
   hypothèses, faute de chiffres officiels pour ce tracé.
 - Les limites de Lévis et de la ceinture nord sont approximées.

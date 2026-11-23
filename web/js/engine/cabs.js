@@ -48,6 +48,9 @@
       this.rejectEma = new Float32Array(Z);
       this.recent = new Int32Array(256).fill(-1); this.recentN = 0;
       this.lastRebalance = 0;
+      // recharge : véhicules (agents) branchés au même moment, pointe de la journée et heure de cette pointe.
+      // Simple mesure : le modèle ne limite pas les bornes, aucun véhicule n'attend donc pour se recharger.
+      this.chargePeak = 0; this.chargePeakT = 0;
       this.stats = { requests: 0, served: 0, rejected: 0, waitSum: 0, waitN: 0, ridesPersons: 0, charges: 0, repositions: 0, revenue: 0, rideKm: 0, ridesDone: 0, pooled: 0, localEmpty: 0, localLoaded: 0 };
     }
 
@@ -195,7 +198,16 @@
       this.aboard[i] = 0; this.shared[i] = 0; this.ns[i] = 0;
       if (this.odo[i] - this.odoCharge[i] > this.rangeKm) {
         this.state[i] = CHARGING; this.tFree[i] = t + C.chargeMin * 60; this.odoCharge[i] = this.odo[i]; this.stats.charges++;
+        this.countCharging(t);
       } else { this.state[i] = IDLE; this.tFree[i] = t; }
+    }
+
+    /** Compte les véhicules branchés à l'instant t (recharge de chargeMin minutes pas encore finie) et garde la pointe.
+     *  Appelé à chaque début de recharge, seul moment où ce nombre peut monter. Ne change aucun état, aucun tirage. */
+    countCharging(t) {
+      let c = 0;
+      for (let k = 0; k < this.n; k++) if (this.state[k] === CHARGING && this.tFree[k] > t) c++;
+      if (c > this.chargePeak) { this.chargePeak = c; this.chargePeakT = t; }
     }
 
     /** Rappel du réseau quand un véhicule de la flotte atteint sa destination. Retourne le prochain point, ou -1. */

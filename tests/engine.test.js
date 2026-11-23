@@ -210,8 +210,13 @@ test('rentabilité : recettes, exploitation et investissement se composent corre
   assert.strictEqual(l.revenue, 70000 * E.transitFare);
   assert.ok(Math.abs(l.opex - (6000 * 16 + 12e6 / 300)) < 1e-6);
   assert.ok(Math.abs(l.capital * 300 - 7.6e9 * TQ.annuity(0.04, 40)) < 1);
-  assert.ok(Math.abs(c.opex - (100000 * 0.25 + 11000 * 0.12 + (1000 * 4000) / 300)) < 1e-6);
-  assert.strictEqual(c.capex, 1000 * 50000);
+  // Cybercab : postes séparés (STORY-024) ; ce résumé n'a pas de nombre de bornes, le ratio de repli s'applique
+  const k = TQ.cabCosts(s), o = k.opex;
+  assert.ok(k.fromRatio && k.chargers === Math.ceil(1000 / E.cab.vehPerCharger));
+  assert.ok(Math.abs(o.km - 100000 * E.cab.opexKm) < 1e-9 && Math.abs(o.fixed - (1000 * E.cab.fixedYearPerVeh) / 300) < 1e-9);
+  assert.ok(Math.abs(c.opex - (o.km + o.fixed + o.supervision + o.cleaning + (o.energy + o.demand + o.chargers + o.depot + o.tax) / 300)) < 1e-6);
+  assert.strictEqual(c.capex, k.capexTotal);
+  assert.ok(Math.abs(c.capital * 300 - k.capitalYear) < 1e-6);
   assert.ok(Math.abs(e.net - (l.net + c.net)) < 1e-6);
   assert.ok(Math.abs(e.annual.net - e.net * 300) < 1e-3);
   // une demi-journée porte la moitié des coûts fixes
@@ -968,4 +973,135 @@ test('calendrier : l\'hiver vient de la date, la case « Journée d\'hiver » re
   // sans date, seule la case compte
   const n = new TQ.Simulation(data, { scenario: { line: 'none', cab: 'off' } });
   assert.strictEqual(n.winter, false); assert.ok(!('date' in n.summary().scenario));
+});
+
+// --- STORY-024 : bornes, dépôts et raccordement des Cybercab
+
+test('Cybercab : le nombre de bornes suit la pointe de véhicules en recharge, sans changer la journée', () => {
+  const C = TQ.PARAMS.cab, battery = C.batteryKwh;
+  C.batteryKwh = 8; // petite batterie : des recharges dès les premières heures
+  try {
+    const sim = new TQ.Simulation(data, { scenario: { line: 'none', cab: 'corridor', fleet: 400 }, start: 7 * 3600 });
+    const F = sim.fleet, starts = [], count = F.countCharging.bind(F);
+    // chaque début de recharge est noté, pour recalculer la pointe à part
+    F.countCharging = (t) => { starts.push(t); count(t); };
+    let seen = 0;
+    for (let i = 0; i < 3 * 360; i++) {
+      sim.step(10);
+      let c = 0;
+      for (let k = 0; k < F.n; k++) if (F.state[k] === 3 && F.tFree[k] > sim.t) c++;
+      seen = Math.max(seen, c * F.w);
+    }
+    const s = sim.summary().cab, kw = (C.batteryKwh * (1 - C.reserve)) / (C.chargeMin / 60);
+    assert.ok(s.charges > 0 && s.chargePeak > 0, 'des recharges ont lieu');
+    // pointe mesurée à chaque début de recharge : au moins celle vue à chaque pas, au plus le nombre de recharges
+    assert.ok(s.chargePeak >= seen - 1e-9 && s.chargePeak <= s.charges + 1e-9, `pointe ${s.chargePeak}, vue ${seen}`);
+    // recalcul indépendant : plus grand chevauchement des recharges [début, début + chargeMin)
+    const len = C.chargeMin * 60;
+    let overlap = 0;
+    for (const t of starts) overlap = Math.max(overlap, starts.filter((u) => u <= t && u + len > t).length);
+    assert.strictEqual(starts.length * F.w, s.charges);
+    assert.ok(Math.abs(s.chargePeak - overlap * F.w) < 1e-9, `pointe ${s.chargePeak}, chevauchement ${overlap * F.w}`);
+    assert.ok(Math.abs(s.chargePeak / F.w - Math.round(s.chargePeak / F.w)) < 1e-9, 'pointe en véhicules réels');
+    assert.strictEqual(s.chargers, Math.max(0, Math.ceil(s.chargePeak * (1 + C.chargerMargin) - 1e-9)));
+    assert.ok(s.chargers >= s.chargePeak && s.chargers <= s.chargePeak * (1 + C.chargerMargin) + 1);
+    assert.ok(Math.abs(s.chargePeakKw - s.chargePeak * kw) < 1e-6);
+    assert.ok(s.chargePeakH >= 7 && s.chargePeakH <= 10);
+    assert.strictEqual(TQ.economics(sim.summary()).parts[0].items.nChargers, s.chargers);
+    // la mesure ne change pas la journée : sans elle, les champs existants du résumé sont identiques
+    const bare = new TQ.Simulation(data, { scenario: { line: 'none', cab: 'corridor', fleet: 400 }, start: 7 * 3600 });
+    bare.fleet.countCharging = () => {};
+    for (let i = 0; i < 3 * 360; i++) bare.step(10);
+    const strip = (x) => { const y = JSON.parse(JSON.stringify(x)); for (const k of ['chargePeak', 'chargePeakH', 'chargePeakKw', 'chargers']) delete y.cab[k]; return JSON.stringify(y); };
+    assert.strictEqual(strip(bare.summary()), strip(sim.summary()));
+  } finally { C.batteryKwh = battery; }
+  // sans recharge : aucune borne, aucune heure de pointe
+  const quiet = run({ line: 'none', cab: 'corridor', fleet: 300 }, 0.2, 7 * 3600).summary().cab;
+  assert.ok(quiet.chargePeak >= 0 && quiet.chargers >= 0);
+  if (quiet.chargePeak === 0) assert.ok(Object.is(quiet.chargers, 0) && quiet.chargePeakH === null);
+});
+
+test('Cybercab : investissement égal à la somme des postes, chacun sur sa durée de vie', () => {
+  const E = JSON.parse(JSON.stringify(TQ.ECON)), p = E.cab, d = p.depot;
+  const s = { elapsedH: 24, cab: { fleet: 1000, rides: 14000, revenue: 90000, vkmEmpty: 20000, vkmLoaded: 80000, kwh: 11000, speed: 25, chargePeak: 50, chargePeakKw: 4850, chargers: 60 } };
+  const k = TQ.cabCosts(s, E), c = k.capex;
+  assert.ok(!k.fromRatio && k.chargers === 60 && k.kwInstalled === 60 * p.charger.kw);
+  assert.strictEqual(k.depots, Math.ceil((60 * p.charger.kw) / p.depotMaxKw));
+  assert.strictEqual(c.vehicles, 1000 * p.vehicle);
+  assert.strictEqual(c.chargers, 60 * p.charger.cost);
+  assert.strictEqual(c.grid, 60 * p.charger.kw * p.grid.perKw);
+  assert.ok(Math.abs(c.land - 1000 * (d.parkM2 + d.buildM2) * d.landM2) < 1e-6);
+  assert.ok(Math.abs(c.pave - 1000 * d.parkM2 * d.paveM2 * (1 + d.indirect)) < 1e-6);
+  assert.ok(Math.abs(c.build - 1000 * d.buildM2 * d.buildCostM2 * (1 + d.indirect)) < 1e-6);
+  const sum = c.vehicles + c.chargers + c.grid + c.land + c.pave + c.build;
+  assert.ok(Math.abs(k.capexTotal - sum) < 1e-6);
+  const e = TQ.economics(s, E), part = e.parts[0], it = part.items;
+  assert.ok(Math.abs(e.capex - sum) < 1e-6 && Math.abs(it.vehicles + it.chargers + it.grid + it.depots - sum) < 1e-6);
+  assert.ok(it.nChargers === 60 && it.nDepots === k.depots && it.chargersFromRatio === false);
+  // durées de vie : chaque poste sur la sienne, le terrain au seul coût d'opportunité
+  const A = (v, n) => v * TQ.annuity(E.discount, n);
+  const expect = A(c.vehicles, p.life) + A(c.chargers, p.charger.life) + A(c.grid, p.grid.life) + c.land * E.discount + A(c.pave, d.paveLife) + A(c.build, d.buildLife);
+  assert.ok(Math.abs(k.capitalYear - expect) < 1e-6 && Math.abs(part.capital * 300 - expect) < 1e-6);
+  const E2 = JSON.parse(JSON.stringify(E)); E2.cab.charger.life = 20;
+  const k2 = TQ.cabCosts(s, E2);
+  assert.ok(Math.abs(k.capitalYear - k2.capitalYear - (A(c.chargers, 10) - A(c.chargers, 20))) < 1e-6, 'seule la part des bornes change');
+  assert.strictEqual(k2.capexTotal, k.capexTotal);
+  // électricité au tarif M : prime sur la pointe mesurée, énergie en deux tranches par dépôt et par mois
+  const W = p.power, month = (11000 * 300) / 12 / k.depots;
+  assert.ok(Math.abs(k.opex.demand - 12 * W.demandKwMonth * 4850) < 1e-6);
+  assert.ok(Math.abs(k.opex.energy - 12 * k.depots * (Math.min(month, W.energy1Kwh) * W.energy1 + Math.max(0, month - W.energy1Kwh) * W.energy2)) < 1e-6);
+  // supervision : heures de circulation / véhicules par agent ; nettoyage : minutes par véhicule et par jour
+  assert.ok(Math.abs(k.opex.supervision - (100000 / 25 / p.supervision.vehPerAgent) * p.supervision.wageH * (1 + p.payrollLoad)) < 1e-6);
+  assert.ok(Math.abs(k.opex.cleaning - 1000 * (p.cleaning.minPerVehDay / 60) * p.cleaning.wageH * (1 + p.payrollLoad)) < 1e-6);
+  // une demi-journée : la moitié de l'investissement étalé, même investissement
+  const half = TQ.economics(Object.assign({}, s, { elapsedH: 12 }), E).parts[0];
+  assert.ok(Math.abs(half.capital - part.capital / 2) < 1e-6 && half.capex === part.capex);
+});
+
+test('Cybercab : un ancien résumé sans nombre de bornes reste calculable', () => {
+  const old = { elapsedH: 24, cab: { fleet: 500, rides: 26000, revenue: 124000, vkmEmpty: 24000, vkmLoaded: 70000, kwh: 10400, speed: 28 } };
+  const e = TQ.economics(old), it = e.parts[0].items;
+  assert.ok(it.chargersFromRatio && it.nChargers === Math.ceil(500 / TQ.ECON.cab.vehPerCharger));
+  for (const v of [e.capex, e.opex, e.capital, e.net, e.annual.net]) assert.ok(Number.isFinite(v));
+  const tot = TQ.economicsTotal([old, old]);
+  assert.ok(Number.isFinite(tot.net) && tot.parts[0].items.nChargers === it.nChargers);
+  // repli : pointe appelée = bornes sans la marge, à la puissance moyenne d'une recharge (pas à 150 kW)
+  const C = TQ.PARAMS.cab, kwCharge = (C.batteryKwh * (1 - C.reserve)) / (C.chargeMin / 60);
+  assert.ok(Math.abs(TQ.cabCosts(old).peakKw - (it.nChargers / (1 + C.chargerMargin)) * kwCharge) < 1e-6);
+  // un résumé passé par JSON avec NaN (devenu null) prend aussi le repli, pas 0 borne
+  const nul = JSON.parse(JSON.stringify(Object.assign({}, old, { cab: Object.assign({}, old.cab, { chargers: NaN, chargePeakKw: NaN }) })));
+  const kn = TQ.cabCosts(nul);
+  assert.ok(nul.cab.chargers === null && kn.fromRatio && kn.chargers === it.nChargers && kn.peakKw > 0);
+  // même sans vitesse ni énergie (très ancien résumé)
+  assert.ok(Number.isFinite(TQ.economics({ elapsedH: 24, cab: { fleet: 100, rides: 0, revenue: 0, vkmEmpty: 0, vkmLoaded: 0, kwh: 0 } }).net));
+});
+
+test('Cybercab : le cumul de plusieurs journées garde les bornes de la plus forte pointe', () => {
+  const base = { fleet: 500, rides: 26000, revenue: 124000, vkmEmpty: 24000, vkmLoaded: 70000, kwh: 10400, speed: 28 };
+  const d1 = { elapsedH: 24, cab: Object.assign({}, base, { chargePeak: 14.3, chargePeakKw: 1387.2, chargers: 18 }) };
+  // la journée suivante vient de commencer : encore aucune recharge
+  const d2 = { elapsedH: 0.2, cab: Object.assign({}, base, { rides: 200, revenue: 950, vkmEmpty: 180, vkmLoaded: 520, kwh: 77, chargePeak: 0, chargePeakKw: 0, chargers: 0 }) };
+  const one = TQ.economics(d1), tot = TQ.economicsTotal([d1, d2]), it = tot.parts[0].items;
+  assert.ok(it.nChargers === 18 && it.peakSoFar === false && !it.chargersFromRatio);
+  assert.strictEqual(tot.capex, one.capex);
+  assert.strictEqual(it.chargers, one.parts[0].items.chargers);
+  // la journée entamée compte son investissement étalé avec les mêmes bornes
+  const d2sized = TQ.economics(d2, undefined, { chargers: 18, chargePeakKw: 1387.2 });
+  assert.ok(Math.abs(tot.capital - (one.capital + d2sized.capital)) < 1e-6);
+  assert.ok(Math.abs(d2sized.capital - (one.capital * 0.2) / 24) < 1e-6);
+  // une seule journée en cours : la pointe est celle atteinte jusqu'ici, et c'est dit
+  const solo = TQ.economicsTotal([Object.assign({}, d1, { elapsedH: 3 })]).parts[0].items;
+  assert.ok(solo.peakSoFar === true && solo.nChargers === 18);
+});
+
+test('Cybercab : le tramway, le bus et la référence ne portent ni bornes ni postes de dépôt', () => {
+  const E = TQ.ECON;
+  for (const kind of ['tram', 'bus']) {
+    const s = { elapsedH: 24, line: { kind, boardings: 50000, vehKm: 7000 } }, p = E.line[kind], l = TQ.economics(s).parts[0];
+    assert.deepStrictEqual(Object.keys(l), ['key', 'kind', 'capex', 'riders', 'revenue', 'opex', 'capital', 'operating', 'net']);
+    assert.ok(Math.abs(l.opex - (7000 * p.opexKm + p.fixedYear / 300)) < 1e-6 && l.capex === p.capex);
+    assert.ok(Math.abs(l.capital * 300 - p.capex * TQ.annuity(E.discount, p.life)) < 1e-3);
+  }
+  const ref = run({ line: 'none', cab: 'off' }, 0.1).summary();
+  assert.ok(!ref.cab && !TQ.economics(ref).parts.length);
 });

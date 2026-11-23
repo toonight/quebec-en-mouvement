@@ -523,6 +523,14 @@
           vkmEmpty: empty, vkmLoaded: loaded, emptyShare: empty + loaded > 0 ? empty / (empty + loaded) : 0,
           kwh: (empty + loaded) * F.kwhKm, ridesPerVeh: s.ridesPersons / P.cab.occupancy / F.fleetReal, charges: s.charges * F.w,
         };
+        // champs ajoutés (STORY-024) : pointe de véhicules en recharge au même moment, heure de cette pointe (heures depuis
+        // minuit, jusqu'à 29), puissance appelée à cette pointe (kW), bornes nécessaires = pointe × (1 + marge), arrondi
+        // à l'unité supérieure. Chaque recharge remet batteryKwh × (1 - reserve) dans la batterie en chargeMin minutes.
+        const C = P.cab, kwCharge = (C.batteryKwh * (1 - C.reserve)) / (C.chargeMin / 60);
+        out.cab.chargePeak = F.chargePeak * F.w;
+        out.cab.chargePeakH = F.chargePeak ? F.chargePeakT / 3600 : null;
+        out.cab.chargePeakKw = out.cab.chargePeak * kwCharge;
+        out.cab.chargers = Math.max(0, Math.ceil(out.cab.chargePeak * (1 + C.chargerMargin) - 1e-9));
         co2Added += out.cab.kwh * P.gridCO2;
       }
       // parc autonome : toutes les autos sont électriques, celles qui roulent encore n'émettent presque plus

@@ -12,6 +12,8 @@
   const moneyText = (v) => money(v).join(' ');
   const signedMoney = (v) => (v > 0.5 ? '+' : '') + moneyText(v);
   const replacedTripsCO2 = 'CO₂ évité par les trajets auto remplacés';
+  // investissement des Cybercab par poste : « véhicules 21,0 M$, 18 bornes 2,3 M$, raccordement 810 k$, 1 dépôt 13,9 M$ »
+  const cabItemsText = (it) => `véhicules ${moneyText(it.vehicles)}, ${fmt.format(it.nChargers)} ${it.nChargers > 1 ? 'bornes' : 'borne'}${it.chargersFromRatio ? ' (estimées)' : it.peakSoFar ? ' (pointe jusqu’ici)' : ''} ${moneyText(it.chargers)}, raccordement ${moneyText(it.grid)}, ${fmt.format(it.nDepots)} ${it.nDepots > 1 ? 'dépôts' : 'dépôt'} ${moneyText(it.depots)}`;
   const scenarioKey = (c) => [c.line, c.cab, c.fleet, c.farePerKm, !!c.winter, !!c.pool, c.carFree || 0, !!c.auto, !!c.farePerOccupant, c.date || ''].join('|');
   // date de la journée : « Mercredi 22 juillet 2026 · vacances de la construction », ou « Jour type d'automne » sans date
   const cap1 = (t) => t.charAt(0).toUpperCase() + t.slice(1);
@@ -1253,7 +1255,7 @@
       $('eb-rev').style.width = pct(e.revenue); $('eb-opex').style.width = pct(e.opex); $('eb-cap').style.width = pct(e.capital);
       $('k-oper').style.color = e.operating < 0 ? 'var(--bad)' : 'var(--ok)';
       $('k-net').style.color = e.net < 0 ? 'var(--bad)' : 'var(--ok)';
-      setText('k-capex', `Investissement à amortir : ${e.parts.map((p) => `${moneyText(p.capex)} (${p.kind === 'tram' ? 'tramway' : p.kind === 'bus' ? 'voies réservées et bus' : 'Cybercab et recharge'})`).join(' + ')}.`);
+      setText('k-capex', `Investissement à amortir : ${e.parts.map((p) => `${moneyText(p.capex)} (${p.kind === 'tram' ? 'tramway' : p.kind === 'bus' ? 'voies réservées et bus' : p.items ? `Cybercab : ${cabItemsText(p.items)}` : 'Cybercab'})`).join(' + ')}.`);
     }
     setText('k-co2', fmt1.format(Math.abs(R.co2Avoided)));
     setText('k-co2-title', s.scenario.auto ? replacedTripsCO2 + ' et l’électrification du parc' : replacedTripsCO2);
@@ -1302,7 +1304,8 @@
     if (!s.line && !s.cab && !(s.scenario && s.scenario.auto)) return `<tr><td>${esc(s.label)}</td>${day}${'<td>–</td>'.repeat(11)}</tr>`;
     const e = TQ.economics(s), a = e.annual, y = a.society;
     const signed = (v, strong) => (v == null ? '<td>–</td>' : `<td style="color:var(--${v < 0 ? 'bad' : 'ok'})${strong ? ';font-weight:600' : ''}">${moneyText(v)}</td>`);
-    return `<tr><td>${esc(s.label)}</td>${day}<td>${moneyText(e.capex)}</td><td>${moneyText(a.revenue)}</td><td>${moneyText(a.opex)}</td><td>${moneyText(a.capital)}</td>${signed(a.net, true)}${signed(y.riders)}${signed(y.carFree)}${signed(y.drivers)}${signed(y.co2)}${signed(y.rtcLoss)}${signed(y.net, true)}</tr>`;
+    const cabPart = e.parts.find((p) => p.items), capexCell = cabPart ? `${moneyText(e.capex)}<br><small>${cabItemsText(cabPart.items)}</small>` : moneyText(e.capex);
+    return `<tr><td>${esc(s.label)}</td>${day}<td>${capexCell}</td><td>${moneyText(a.revenue)}</td><td>${moneyText(a.opex)}</td><td>${moneyText(a.capital)}</td>${signed(a.net, true)}${signed(y.riders)}${signed(y.carFree)}${signed(y.drivers)}${signed(y.co2)}${signed(y.rtcLoss)}${signed(y.net, true)}</tr>`;
   }
 
   // Cache raw daily results so both sides always use the current cost sliders.
@@ -1396,7 +1399,7 @@
       ${datedNote}
       ${econChart()}
       <div class="table-wrap"><table><thead><tr><th>Scénario</th><th>Jour</th><th>Investissement</th><th>Recettes</th><th>Exploitation</th><th>Investissement étalé</th><th>Résultat de l'exploitant</th><th>Gain des voyageurs</th><th>Déplacements faits sans auto</th><th>Temps des automobilistes</th><th>Valeur du ${co2Heading}</th><th>Recettes des autobus du RTC</th><th>Bilan pour la société</th></tr></thead><tbody>${sim.history.map(econRow).join('')}</tbody></table></div>
-      <p class="hint">Le bilan pour la société additionne le résultat de l'exploitant et les cinq colonnes qui le précèdent. « Déplacements faits sans auto » ne se remplit qu'avec l'option d'abandon de l'auto : c'est l'écart de coût généralisé (temps, attente, marche, tarif, stationnement, coût au kilomètre) entre l'auto et le mode de remplacement, sans les économies de possession de l'auto. « Recettes des autobus du RTC » est négatif quand des usagers quittent les autobus, positif quand des déplacements faits sans auto s'y reportent. Le résultat de l'exploitant et le bilan changent avec les curseurs « Hypothèses de coûts ».</p>`;
+      <p class="hint">Le bilan pour la société additionne le résultat de l'exploitant et les cinq colonnes qui le précèdent. « Déplacements faits sans auto » ne se remplit qu'avec l'option d'abandon de l'auto : c'est l'écart de coût généralisé (temps, attente, marche, tarif, stationnement, coût au kilomètre) entre l'auto et le mode de remplacement, sans les économies de possession de l'auto. « Recettes des autobus du RTC » est négatif quand des usagers quittent les autobus, positif quand des déplacements faits sans auto s'y reportent. Le résultat de l'exploitant et le bilan changent avec les curseurs « Hypothèses de coûts ». Pour les Cybercab, l'investissement se détaille en véhicules, bornes (nombre tiré de la pointe de recharge simulée, plus ${fmt.format(TQ.PARAMS.cab.chargerMargin * 100)} %), raccordement électrique et dépôts (terrain, stationnement et bâtiment), chacun étalé sur sa durée de vie.</p>`;
   }
 
   // ------------------------------------------------------------------ commandes

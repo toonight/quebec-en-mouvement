@@ -68,6 +68,7 @@
     },
     cab: {
       seats: 2, occupancy: 1.4, batteryKwh: 47.6, kwhKm: 0.11, maxEtaMin: 12, chargeMin: 25, reserve: 0.15,
+      chargerMargin: 0.2, // bornes en plus de la pointe de recharge simulée (pannes, journées plus chargées) : hypothèse
       fareBase: 3.5, farePerKm: 1.2, captivity: 9, corridorRadius: 1200, rebalanceIdleMin: 20,
       localKmLoaded: 0.6, localKmEmpty: 0.3, // rues locales non modélisées, aux deux bouts d'une course
       // courses partagées : rabais, détour ressenti (min), attente et détour maximaux pour jumeler deux demandes (min)
