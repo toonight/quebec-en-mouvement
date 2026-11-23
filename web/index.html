@@ -55,6 +55,22 @@
     <label class="check"><input type="checkbox" id="auto" aria-describedby="auto-hint"> Toutes les autos autonomes et connectées (plus de feux aux carrefours)</label>
     <p class="hint" id="auto-hint" role="status" hidden>Supposition : tout le parc remplacé par des autos électriques à conduite autonome (par exemple des Tesla) qui se coordonnent entre elles. Le coût de ce remplacement n'est pas compté.</p>
     <label class="check"><input type="checkbox" id="winter"> Journée d'hiver (chaussée, autonomie des batteries)</label>
+    <div class="start-at">
+      <label for="start-date">Démarrer à</label>
+      <select id="start-date">
+        <option value="">Jour type d'automne (référence)</option>
+        <option value="2026-07-08">Été : mercredi 8 juillet 2026</option>
+        <option value="2026-07-22">Vacances de la construction : mercredi 22 juillet 2026</option>
+        <option value="2026-08-31">Rentrée : lundi 31 août 2026</option>
+        <option value="2026-12-16">Approche de Noël : mercredi 16 décembre 2026</option>
+        <option value="2026-12-29">Fêtes : mardi 29 décembre 2026</option>
+        <option value="2027-01-20">Hiver : mercredi 20 janvier 2027</option>
+        <option value="custom">Date précise…</option>
+      </select>
+      <input type="date" id="start-custom" min="2026-01-01" max="2027-12-31" aria-label="Date précise, de 2026 à 2027" hidden>
+      <p class="warn" id="start-error" role="status" hidden>Date refusée : choisissez une date de 2026 ou 2027.</p>
+      <p class="hint">Avec une date, les journées s'enchaînent : mercredi, jeudi, vendredi… Après le 31 décembre 2027, la dernière journée se rejoue. La date change le nombre de déplacements (mois, vacances, Fêtes, fériés, fin de semaine), les voies réservées et l'horaire de la ligne. De décembre à mars, la journée est une journée d'hiver.</p>
+    </div>
     <div class="starts" role="group" aria-label="Heure de départ">
       <span>Reprendre à</span>
       <button data-start="5">5 h</button><button data-start="7">7 h</button><button data-start="12">midi</button><button data-start="16">16 h</button>
@@ -128,6 +144,7 @@
       <div><dt>Véhicules en service</dt><dd id="k-lveh">–</dd></div>
       <div><dt>Laissés à quai</dt><dd id="k-denied">–</dd></div>
     </dl>
+    <p class="hint" id="line-run"></p>
   </section>
   <section id="sec-cab" hidden>
     <h2>Cybercab</h2>
@@ -141,6 +158,7 @@
       <div><dt>Vitesse moyenne</dt><dd id="k-cspeed">–</dd></div>
       <div id="row-pooled" hidden><dt>Passagers en course partagée</dt><dd id="k-pooled">–</dd></div>
     </dl>
+    <p class="hint" id="cab-run"></p>
   </section>
   <section id="sec-econ" hidden>
     <h2>Rentabilité depuis le départ</h2>
@@ -246,6 +264,7 @@
 <script src="js/engine/network.js"></script>
 <script src="js/engine/line.js"></script>
 <script src="js/engine/cabs.js"></script>
+<script src="js/engine/calendar.js"></script>
 <script src="js/engine/sim.js"></script>
 <script src="js/engine/econ.js"></script>
 <script src="js/engine/reference.js"></script>

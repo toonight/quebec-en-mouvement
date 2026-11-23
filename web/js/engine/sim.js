@@ -19,6 +19,9 @@
     }
   };
 
+  // date de la journée (scénario.date, AAAA-MM-JJ) : null = jour type d'automne ; une date hors du calendrier est refusée
+  const checkDate = (sc) => { if (sc.date != null) TQ.dayInfo(sc.date); };
+
   class Simulation {
     constructor(data, opts) {
       opts = opts || {};
@@ -30,7 +33,9 @@
       // une ligne (tram, bus) va avec cab 'off', une flotte avec line 'none' (un mélange est refusé, voir checkSingleMode) ;
       // pool : courses partagées ; carFree : part des déplacements automobiles des personnes qui habitent la zone desservie faits sans auto (tirage par déplacement)
       this.scenario = Object.assign({ line: 'none', cab: 'off', fleet: 3000, farePerKm: this.P.cab.farePerKm, winter: false, pool: false, carFree: 0, auto: false }, opts.scenario || {});
-      compatLine(this.scenario); checkSingleMode(this.scenario); // refus avant toute préparation
+      // date : null par défaut (jour type d'automne) ; elle n'est pas ajoutée aux valeurs par défaut, pour que le résumé
+      // d'une journée sans date garde exactement la même forme
+      compatLine(this.scenario); checkSingleMode(this.scenario); checkDate(this.scenario); // refus avant toute préparation
       this.history = [];
       this.day = 1;
       this.prepareDemand();
@@ -56,6 +61,9 @@
       for (let h = 0; h < 24; h++) share[PERIOD_OF_HOUR[h]] += P.hourly[h];
       this.hourRate = new Float64Array(24); // déplacements par heure
       for (let h = 0; h < 24; h++) { const k = PERIOD_OF_HOUR[h]; this.hourRate[h] = (this.periodTotal[k] * P.hourly[h]) / share[k]; }
+      // demande du jour type d'automne, gardée telle quelle : applyCalendar la reprend sans calcul un jour neutre
+      this.baseRate = this.hourRate;
+      this.baseTotal = 0; for (let h = 0; h < 24; h++) this.baseTotal += this.baseRate[h];
       // parts modales de référence par paire OD et par période (repli sur les parts 24 h quand la cellule est trop mince)
       const cell = (k, m, i, j) => (k === 'N' ? Math.max(0, od['J' + m][i][j] - od['A' + m][i][j] - od['H' + m][i][j] - od['P' + m][i][j]) : od[k + m][i][j]);
       this.baseShare = {};
@@ -135,10 +143,18 @@
     // ------------------------------------------------------------------ état
     reset(start) {
       const sc = this.scenario, P = this.P;
-      compatLine(sc); checkSingleMode(sc); // un scénario refusé ne touche pas à l'état
+      compatLine(sc); checkSingleMode(sc); checkDate(sc); // un scénario refusé ne touche pas à l'état
       this.resets = (this.resets || 0) + 1; // l'affichage s'en sert pour oublier les véhicules de la journée précédente
       // journées enchaînées depuis le dernier départ : toute remise à zéro les oublie (endDay les remet ensuite)
-      this.run = [];
+      this.run = []; this.runAux = [];
+      // date courante, hors de t (t reste compté en secondes depuis minuit du premier jour) : endDay la fait avancer.
+      this.date = sc.date != null ? sc.date : null;
+      this.dayInfo = TQ.dayInfo(this.date);
+      // hiver : la case « Journée d'hiver » d'abord ; sinon, avec une date, de décembre à mars
+      this.winter = !!sc.winter || (this.date != null && this.dayInfo.winter);
+      this.applyCalendar();
+      // voies réservées de pointe : seulement les jours ouvrables (avant setTime, qui les pose)
+      this.net.peaksOff = !this.dayInfo.peakLanes;
       // flux aléatoires indépendants : la demande tirée ne dépend pas du scénario
       // et chaque journée rejoue le même tirage : les journées comparées, et la référence, ont la même demande
       this.rndDemand = TQ.rng(this.seed + 7919);
@@ -151,10 +167,10 @@
       this.tDayEnd = P.dayStart + 86400 * (Math.floor((start - P.dayStart) / 86400) + 1); // prochaine frontière de 5 h
       this.net.setTime(start); // capacités de pointe de l'heure de départ
       // le tramway ou les bus prennent une voie du tracé aux autos
-      this.net.setConditions({ laneDrop: sc.line === 'tram' || sc.line === 'bus', winter: sc.winter, auto: !!sc.auto });
+      this.net.setConditions({ laneDrop: sc.line === 'tram' || sc.line === 'bus', winter: this.winter, auto: !!sc.auto });
       this.net.resetTraffic();
       for (let d = 0; d < this.net.D; d++) this.net.computeTree(d);
-      this.line = sc.line === 'none' ? null : new TQ.TransitLine(this.data.line, sc.line, rndLine, sc.winter);
+      this.line = sc.line === 'none' ? null : new TQ.TransitLine(this.data.line, sc.line, rndLine, this.winter, this.dayInfo.service);
       this.fleet = null; this.net.cabKm = null; this.net.cabIdx = null;
       if (sc.cab !== 'off') {
         const mask = new Uint8Array(this.info.length);
@@ -163,7 +179,7 @@
           mask[p] = i.gate ? 0 : sc.cab === 'corridor' ? (this.lineDist[p] <= P.cab.corridorRadius ? 1 : 0) : i.zone <= 5 ? 1 : 0;
         }
         this.cabMask = mask;
-        this.fleet = new TQ.CabFleet(this.net, mask, sc.fleet, this.info, rndCab, sc.winter, { pool: sc.pool });
+        this.fleet = new TQ.CabFleet(this.net, mask, sc.fleet, this.info, rndCab, this.winter, { pool: sc.pool });
       }
       this.pending = []; for (let i = 0; i < 64; i++) this.pending.push([]);
       this.pendingMin = Math.floor(start / 60);
@@ -183,10 +199,23 @@
       this.onArrive = (type, payload) => (type === 0 ? -1 : this.fleet ? this.fleet.onArrive(type, payload, this.t) : -1);
     }
 
+    /** Demande horaire de la journée (hourRate) selon le calendrier. Jour neutre, ou facteurs tous à 1 sans profil :
+     *  la demande du jour type, sans aucun calcul (mêmes nombres à l'octet). Jour ouvrable : chaque heure multipliée par
+     *  le facteur de sa période. Samedi, dimanche, férié : volume du jour type × facteur de la journée × profil horaire.
+     *  Les matrices O-D de chaque période gardent la structure des déplacements (aucune enquête de fin de semaine).
+     *  Aucun tirage aléatoire de plus : seul le nombre de déplacements tirés par pas change. */
+    applyCalendar() {
+      const d = this.dayInfo, f = d.f;
+      if (d.neutral || (!d.profile && f.A === 1 && f.H === 1 && f.P === 1 && f.N === 1)) { this.hourRate = this.baseRate; return; }
+      const r = new Float64Array(24);
+      for (let h = 0; h < 24; h++) r[h] = d.profile ? this.baseTotal * d.total * d.profile[h] : this.baseRate[h] * f[PERIOD_OF_HOUR[h]];
+      this.hourRate = r;
+    }
+
     setScenario(cfg) {
       // vérifié sur une copie : un scénario refusé laisse la simulation intacte
       const next = Object.assign({}, this.scenario, cfg);
-      compatLine(next); checkSingleMode(next);
+      compatLine(next); checkSingleMode(next); checkDate(next);
       Object.assign(this.scenario, cfg);
       this.reset(this.t);
     }
@@ -201,7 +230,7 @@
       if (s.cab !== 'off') parts.push(`Cybercab ${s.cab === 'corridor' ? 'corridor' : 'réseau élargi'} (${[s.fleet.toLocaleString('fr-CA'), ...extra].join(', ')})`);
       if (!parts.length) parts.push('Référence (situation actuelle)');
       if (s.auto) { if (parts[0] === 'Référence (situation actuelle)') parts[0] = 'Autos autonomes, sans feux'; else parts.push('autos autonomes'); }
-      if (s.winter) parts.push('hiver');
+      if (this.winter) parts.push('hiver'); // case cochée, ou date de décembre à mars
       return parts.join(' + ');
     }
 
@@ -270,16 +299,36 @@
       // seules les journées complètes (5 h à 5 h) entrent dans la comparaison
       if (this.tDayStart <= this.P.dayStart + 1) { this.history.push(s); this.lastDayFlows = this.net.eday.slice(); }
       // le cumul depuis le départ, lui, garde aussi une journée partielle : la fin de journée ne le coupe pas
-      const run = this.run.concat([s]);
+      const run = this.run.concat([s]), runAux = this.runAux.concat([this.auxStats()]);
       this.day++;
+      // avec une date, la journée suivante est le lendemain ; sans date, le jour type se rejoue à l'identique.
+      // Au-delà de la fin du calendrier, la dernière date se rejoue.
+      if (this.date != null) { const next = TQ.addDays(this.date, 1); if (next <= TQ.CALENDAR.last) this.scenario.date = next; }
       this.reset(this.P.dayStart + 0);
-      this.run = run;
+      this.run = run; this.runAux = runAux;
     }
 
     /** Résumés des journées enchaînées depuis le dernier départ (changement de scénario, saut dans le temps,
      *  remise à zéro), journée en cours comprise, en dernier. Seuls des résumés sont gardés. */
     runSummaries() {
       return this.run.concat([this.summary()]);
+    }
+
+    /** Compteurs bruts de la journée en cours qui ne figurent pas dans summary() (montées par station, attentes,
+     *  heures des Cybercab) : gardés à part, en parallèle de run, pour que le résumé garde la même forme. */
+    auxStats() {
+      const L = this.line, F = this.fleet, ns = this.net.stats;
+      return {
+        stationBoard: L ? Array.from(L.stationBoard) : null,
+        lineWaitSum: L ? L.stats.waitSum : 0, lineWaitN: L ? L.stats.waitN : 0,
+        cabWaitSum: F ? F.stats.waitSum : 0, cabWaitN: F ? F.stats.waitN : 0,
+        cabVkm: F ? ns[1].vkm + ns[2].vkm : 0, cabVh: F ? ns[1].vh + ns[2].vh : 0,
+      };
+    }
+
+    /** Compteurs bruts des journées de runSummaries(), dans le même ordre, journée en cours en dernier. */
+    runAuxiliary() {
+      return this.runAux.concat([this.auxStats()]);
     }
 
     // ------------------------------------------------------------------ demande et choix modal
@@ -397,7 +446,7 @@
       if (noCar) {
         const N = P.noCar, r2 = this.rndNoCar;
         const opts = [[gtRtc, 1, 'rtc', 0], [(km * 1000) / P.walkSpeed, 2, 'walk', 0]];
-        if (r2() < N.bikeShare * (this.scenario.winter ? N.bikeWinterFactor : 1)) opts.push([(km / N.bikeSpeedKmh) * 60, 2, 'bike', 0]);
+        if (r2() < N.bikeShare * (this.winter ? N.bikeWinterFactor : 1)) opts.push([(km / N.bikeSpeedKmh) * 60, 2, 'bike', 0]);
         if (cabOk) opts.push([cabChoiceNoCar, 5, 'cab', 0]);
         let pick = null;
         while (!pick) {
@@ -438,10 +487,18 @@
     }
 
     // ------------------------------------------------------------------ indicateurs
+    /** Copie du scénario pour le résumé : la date n'y figure que si elle est posée (le résumé d'une journée sans date
+     *  reste identique à l'octet), et c'est celle de la journée résumée. */
+    scenarioCopy() {
+      const sc = Object.assign({}, this.scenario);
+      if (this.date == null) delete sc.date; else { sc.date = this.date; sc.winter = this.winter; } // hiver venu de la date compris
+      return sc;
+    }
+
     summary() {
       const P = this.P, m = this.m, ns = this.net.stats, L = this.line, F = this.fleet;
       const out = {
-        label: this.scenarioLabel(), scenario: Object.assign({}, this.scenario), day: this.day, t: this.t, elapsedH: (this.t - this.tDayStart) / 3600,
+        label: this.scenarioLabel(), scenario: this.scenarioCopy(), day: this.day, t: this.t, elapsedH: (this.t - this.tDayStart) / 3600,
         trips: m.trips, avgCrowKm: m.trips ? m.crowKm / m.trips : 0, modes: Object.assign({}, m.modes), carsRemoved: m.carsRemoved,
         carVkm: ns[0].vkm, carVh: ns[0].vh, carDelayH: ns[0].vh - ns[0].vhFree,
         avgSpeed: ns[0].vh > 0 ? ns[0].vkm / ns[0].vh : 0, congestion: ns[0].vhFree > 0 ? ns[0].vh / ns[0].vhFree - 1 : 0,
@@ -478,6 +535,43 @@
       return out;
     }
   }
+
+  /** Compteurs cumulés sur plusieurs journées enchaînées du même scénario (runSummaries() et runAuxiliary()), sur le
+   *  modèle de TQ.economicsTotal : déplacements, répartition, CO2 évité, montées (et par station) et Cybercab.
+   *  Les moyennes (attentes, vitesse, km à vide) sont refaites à partir des sommes, pas moyennées jour par jour.
+   *  days : journées entamées ; hours : heures simulées. aux est facultatif (sans lui : pas de détail par station). */
+  TQ.runTotals = function (list, aux) {
+    const out = { days: 0, hours: 0, trips: 0, modes: { auto: 0, rtc: 0, actif: 0, autre: 0, line: 0, cab: 0 }, co2Avoided: 0, line: null, cab: null, stationBoard: null };
+    if (!list || !list.length) return out;
+    let lw = 0, ln = 0, cw = 0, cn = 0, cvkm = 0, cvh = 0;
+    list.forEach((s, i) => {
+      const a = aux && aux[i];
+      if (s.elapsedH > 0) out.days++;
+      out.hours += Math.max(0, s.elapsedH); out.trips += s.trips; out.co2Avoided += s.co2Avoided || 0;
+      for (const k of MODES) out.modes[k] += s.modes[k] || 0;
+      if (s.line) {
+        const L = (out.line = out.line || { kind: s.line.kind, boardings: 0, denied: 0, avgWait: 0 });
+        L.boardings += s.line.boardings; L.denied += s.line.denied;
+        if (a) { lw += a.lineWaitSum; ln += a.lineWaitN; } else { lw += s.line.avgWait; ln += 1; }
+        if (a && a.stationBoard) {
+          const b = (out.stationBoard = out.stationBoard || new Float64Array(a.stationBoard.length));
+          for (let j = 0; j < b.length; j++) b[j] += a.stationBoard[j];
+        }
+      }
+      if (s.cab) {
+        const C = (out.cab = out.cab || { rides: 0, pooled: 0, unserved: 0, requests: 0, vkmEmpty: 0, vkmLoaded: 0, avgWait: 0, emptyShare: 0, speed: 0 });
+        for (const k of ['rides', 'pooled', 'unserved', 'requests', 'vkmEmpty', 'vkmLoaded']) C[k] += s.cab[k] || 0;
+        if (a) { cw += a.cabWaitSum; cn += a.cabWaitN; cvkm += a.cabVkm; cvh += a.cabVh; } else { cw += s.cab.avgWait; cn += 1; }
+      }
+    });
+    if (out.line) out.line.avgWait = ln ? lw / ln : 0;
+    if (out.cab) {
+      const C = out.cab, km = C.vkmEmpty + C.vkmLoaded;
+      C.avgWait = cn ? cw / cn : 0; C.emptyShare = km > 0 ? C.vkmEmpty / km : 0;
+      C.speed = cvh > 0 ? cvkm / cvh : list[list.length - 1].cab ? list[list.length - 1].cab.speed : 0;
+    }
+    return out;
+  };
 
   Simulation.MODES = MODES;
   Simulation.STEP = STEP;

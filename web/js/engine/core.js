@@ -126,10 +126,14 @@
     return (h < 10 ? '0' : '') + h + ' h ' + (m < 10 ? '0' : '') + m;
   };
 
-  /** Type de période de service pour une heure donnée. */
-  TQ.servicePeriod = function (t) {
+  /** Type de période de service pour une heure donnée. grid : 'semaine' (par défaut) ou 'fin-de-semaine'.
+   *  Fin de semaine (samedi, dimanche, fériés) : pas de pointe, intervalle de jour de 6 h à 20 h, puis de soir. C'est ce
+   *  que font les Métrobus 800 et 801 du RTC (environ 15 min toute la journée, sans pointe, horaires de novembre 2026),
+   *  appliqué au tramway et au bus (analogue) ; l'intervalle de jour du tramway la fin de semaine est une hypothèse. */
+  TQ.servicePeriod = function (t, grid) {
     const h = ((t % 86400) / 3600);
     if (h >= 1 && h < 5) return 'closed';
+    if (grid === 'fin-de-semaine') return h >= 6 && h < 20 ? 'day' : 'evening';
     if ((h >= 6.5 && h < 9) || (h >= 15 && h < 18)) return 'peak';
     if ((h >= 6 && h < 6.5) || (h >= 9 && h < 9.5) || (h >= 14.5 && h < 15) || (h >= 18 && h < 18.5)) return 'shoulder';
     if (h >= 9.5 && h < 14.5) return 'day';

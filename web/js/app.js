@@ -12,7 +12,26 @@
   const moneyText = (v) => money(v).join(' ');
   const signedMoney = (v) => (v > 0.5 ? '+' : '') + moneyText(v);
   const replacedTripsCO2 = 'CO₂ évité par les trajets auto remplacés';
-  const scenarioKey = (c) => [c.line, c.cab, c.fleet, c.farePerKm, !!c.winter, !!c.pool, c.carFree || 0, !!c.auto, !!c.farePerOccupant].join('|');
+  const scenarioKey = (c) => [c.line, c.cab, c.fleet, c.farePerKm, !!c.winter, !!c.pool, c.carFree || 0, !!c.auto, !!c.farePerOccupant, c.date || ''].join('|');
+  // date de la journée : « Mercredi 22 juillet 2026 · vacances de la construction », ou « Jour type d'automne » sans date
+  const cap1 = (t) => t.charAt(0).toUpperCase() + t.slice(1);
+  // sans date avec la case « Journée d'hiver » : « Jour type » seulement (la saison n'est plus l'automne)
+  const dayText = (date, winter) => (date == null ? (winter ? 'Jour type' : 'Jour type d’automne') : `${cap1(TQ.formatDate(date))} · ${TQ.dayInfo(date).label}`);
+  // type de jour d'une journée simulée : ce qui change la journée (facteurs des périodes ou profil horaire, facteur de
+  // la journée, voies réservées, grille de la ligne). Le jour type et un jour ouvrable d'automne sont du même type ;
+  // seules des journées du même type se comparent
+  const dayKind = (date) => {
+    const d = TQ.dayInfo(date);
+    const shape = d.profile ? (d.profile === TQ.CALENDAR.factors.PROFILE.samedi ? 'samedi' : 'dimanche') : ['A', 'H', 'P', 'N'].map((k) => d.f[k]).join('/');
+    return [shape, d.total.toFixed(6), d.peakLanes, d.service].join(':');
+  };
+  const dayKindText = (date) => {
+    if (date == null) return 'jour type d’automne';
+    const d = TQ.dayInfo(date);
+    if (d.holiday) return d.label;
+    const kind = d.type === 'ouvrable' ? 'jour ouvrable' : d.weekdayLabel;
+    return `${kind}, ${d.special ? d.label : TQ.formatDate(date).split(' ').slice(2).join(' ')}`;
+  };
   const COLORS = { tram: [255, 200, 61], bus: [82, 182, 255], cab: [255, 92, 147], car: [205, 216, 230] };
   const MODE_META = [
     ['auto', 'Automobile', '#cdd8e6'], ['rtc', 'Autobus actuels', '#6f86a3'], ['actif', 'Marche et vélo', '#3ecf8e'],
@@ -21,7 +40,9 @@
   // les noms de rues et de stations viennent de données externes (OpenStreetMap) : toujours les échapper
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const status = $('status');
-  const state = { speed: 120, playing: true, layers: { cars: true, roads: true, zone: true }, colorTick: 0 };
+  // startDate : date de départ des journées enchaînées (null : jour type). Le lien et « Démarrer à » la montrent, même
+  // quand la simulation est passée au lendemain.
+  const state = { speed: 120, playing: true, layers: { cars: true, roads: true, zone: true }, colorTick: 0, startDate: null };
   let sim, map, overlay, roadData, lineParts, stationData;
 
   function fail(msg) { status.hidden = false; status.textContent = msg; }
@@ -33,6 +54,7 @@
   setTimeout(() => {
     sim = new TQ.Simulation(window.TQ_DATA, { scenario: readHash() });
     window.sim = sim;
+    state.startDate = sim.scenario.date || null;
     prepareStatic();
     initMap();
     bindUi();
@@ -74,6 +96,8 @@
     if (p) sc.farePerKm = Math.round(p * 10) / 10;
     if (q.get('hiver') === '1') sc.winter = true;
     if (q.get('auto') === '1') sc.auto = true;
+    // date de départ : une date du calendrier connu (2026-2027), sinon le jour type d'automne
+    if (q.has('date')) { try { TQ.dayInfo(q.get('date')); sc.date = q.get('date'); } catch (e) { /* date ignorée */ } }
     // « photo » : vue 3D avec les bâtiments réels ; la clé d'API, elle, ne figure jamais dans le lien
     state.view3d = q.get('vue') === '3d' || q.get('vue') === 'photo'; state.wantPhoto = q.get('vue') === 'photo';
     if (q.get('partage') === '1') sc.pool = true;
@@ -103,6 +127,7 @@
     if (s.cab !== 'off') { q.set('flotte', s.fleet); q.set('tarif', s.farePerKm); }
     if (s.winter) q.set('hiver', '1');
     if (s.auto) q.set('auto', '1');
+    if (state.startDate) q.set('date', state.startDate);
     if (state.view3d) q.set('vue', state.photo ? 'photo' : '3d');
     if (s.cab !== 'off' && s.pool) q.set('partage', '1');
     if (s.cab !== 'off' && s.carFree > 0) q.set('sansauto', Math.round(s.carFree * 100));
@@ -119,6 +144,10 @@
     $('fleet').value = s.fleet; $('fare').value = s.farePerKm; $('winter').checked = !!s.winter; $('auto').checked = !!s.auto; $('auto-hint').hidden = !s.auto;
     // le parc autonome se voit sur la carte : bandeau, légende et couleur des autos
     $('auto-badge').hidden = !s.auto; document.body.classList.toggle('autos', !!s.auto); legendCars();
+    // « Démarrer à » : la date de départ, une des dates proposées, sinon une date précise
+    const start = state.startDate, sel = $('start-date'), preset = [...sel.options].some((o) => o.value === (start || ''));
+    sel.value = preset ? start || '' : 'custom';
+    $('start-custom').hidden = preset; if (!preset) $('start-custom').value = start;
     $('pool').checked = !!s.pool; $('carfree').value = Math.round((s.carFree || 0) * 100);
     $('carfree-out').textContent = Math.round((s.carFree || 0) * 100) + ' %';
     $('fleet-out').textContent = fmt.format(s.fleet); $('fare-out').textContent = fmt2.format(s.farePerKm) + ' $';
@@ -266,12 +295,18 @@
     state.labelLayer = state.labelLayer3d;
   }
 
+  /** Montées à une station, cumulées sur les journées enchaînées depuis le départ. */
+  function stationBoardings(i) {
+    const t = TQ.runTotals(sim.runSummaries(), sim.runAuxiliary());
+    return t.stationBoard ? t.stationBoard[i] : sim.line.stationBoard[i];
+  }
+
   function tooltip({ object, layer }) {
     if (!object || !layer) return null;
     if (layer.id === 'stations' || layer.id === 'stations3d') {
       const waiting = sim.line ? sim.line.waitingAt(object.i) : 0;
       const kind = object.hub ? 'Pôle d\'échanges' : object.underground && sim.scenario.line !== 'bus' ? 'Station souterraine' : 'Station';
-      return { html: `<b>${esc(object.name)}</b><br>${kind}${sim.line ? `<br>${fmt.format(waiting)} personnes en attente<br>${fmt.format(sim.line.stationBoard[object.i])} montées depuis le départ` : ''}` };
+      return { html: `<b>${esc(object.name)}</b><br>${kind}${sim.line ? `<br>${fmt.format(waiting)} personnes en attente<br>${fmt.format(stationBoardings(object.i))} montées depuis le départ` : ''}` };
     }
     if (layer.id === 'line-veh' || layer.id === 'line-veh3d') {
       const L = sim.line, pct = Math.round((object.v.load * L.scale / L.p.capacity) * 100);
@@ -1144,15 +1179,22 @@
 
   function updateUi() {
     const s = sim.summary(), L = sim.line, F = sim.fleet;
+    // compteurs cumulés sur les journées enchaînées depuis le départ, comme la rentabilité ; un changement de scénario
+    // les remet à 0. R reprend la forme du résumé pour ces compteurs.
+    const runList = sim.runSummaries(), R = TQ.runTotals(runList, sim.runAuxiliary());
+    const ranDays = sim.run.length > 0, daysText = `${fmt.format(R.days)} journée${R.days > 1 ? 's' : ''}`;
     setText('clock', TQ.formatClock(sim.t + sim.stepRest));
-    setText('day-label', `Jour ${sim.day}, ${sim.scenarioLabel()}`);
-    setText('split-title', `Déplacements depuis ${TQ.formatClock(Math.round(sim.tDayStart / 600) * 600).replace(' h 00', ' h')}`);
-    const total = Math.max(1, s.trips);
+    // avec une date, l'étiquette donne la date (« Jour N » serait trompeur) ; sans date, le jour type et son rang
+    setText('day-label', sim.date ? `${dayText(sim.date)}, ${sim.scenarioLabel()}` : `${dayText(null, sim.winter)}, journée ${sim.day}, ${sim.scenarioLabel()}`);
+    setText('split-title', ranDays ? `Déplacements depuis le départ, ${daysText}` : `Déplacements depuis ${TQ.formatClock(Math.round(sim.tDayStart / 600) * 600).replace(' h 00', ' h')}`);
+    setText('line-run', ranDays ? `Montées, laissés à quai et attente moyenne : cumul de ${daysText} depuis le départ.` : '');
+    setText('cab-run', ranDays ? `Passagers, attente, kilomètres à vide, demandes sans véhicule et vitesse : cumul de ${daysText} depuis le départ.` : '');
+    const total = Math.max(1, R.trips);
     const lineName = L ? (L.kind === 'tram' ? 'Tramway' : 'Bus voies réservées') : 'Ligne';
     const lineHex = L && L.kind === 'bus' ? '#52b6ff' : '#ffc83d';
-    $('split').innerHTML = MODE_META.map(([k, , c]) => `<span style="flex:0 0 ${(s.modes[k] / total) * 100}%;background:${k === 'line' ? lineHex : c}"></span>`).join('');
+    $('split').innerHTML = MODE_META.map(([k, , c]) => `<span style="flex:0 0 ${(R.modes[k] / total) * 100}%;background:${k === 'line' ? lineHex : c}"></span>`).join('');
     $('split-legend').innerHTML = MODE_META.filter(([k]) => (k !== 'line' || L) && (k !== 'cab' || F)).map(([k, label, c]) =>
-      `<li><span><i style="background:${k === 'line' ? lineHex : c}"></i>${k === 'line' ? lineName : label}</span><b>${fmt1.format((s.modes[k] / total) * 100)} %</b></li>`).join('');
+      `<li><span><i style="background:${k === 'line' ? lineHex : c}"></i>${k === 'line' ? lineName : label}</span><b>${fmt1.format((R.modes[k] / total) * 100)} %</b></li>`).join('');
     // valeurs en direct : fenêtre en cours tant qu'aucun relevé de 10 minutes n'existe
     const net = sim.net, w = net.win, has = sim.series.t.length > 0;
     const speed = has ? sim.cur.speed : w.time > 0 ? (w.len / w.time) * 3.6 : 0;
@@ -1170,9 +1212,9 @@
       $('g-load').style.width = Math.min(100, cap ? (peak / cap) * 100 : 0) + '%';
       $('g-load').style.background = lineHex;
       setText('k-peak', fmt.format(peak)); setText('k-cap', fmt.format(cap));
-      kpi('k-board', fmt.format(s.line.boardings)); kpi('k-onboard', fmt.format(L.onboardNow()));
-      kpi('k-lwait', fmt1.format(s.line.avgWait), 'min'); kpi('k-lspeed', s.line.speed ? fmt1.format(s.line.speed) : '–', 'km/h');
-      kpi('k-lveh', fmt.format(L.inService())); kpi('k-denied', fmt.format(s.line.denied));
+      kpi('k-board', fmt.format(R.line.boardings)); kpi('k-onboard', fmt.format(L.onboardNow()));
+      kpi('k-lwait', fmt1.format(R.line.avgWait), 'min'); kpi('k-lspeed', s.line.speed ? fmt1.format(s.line.speed) : '–', 'km/h');
+      kpi('k-lveh', fmt.format(L.inService())); kpi('k-denied', fmt.format(R.line.denied));
       $('key-line-swatch').style.background = lineHex;
     }
     setText('key-line', L ? `Charge du tronçon le plus chargé (${L.kind === 'tram' ? 'tramway' : 'bus'})` : F ? 'Cybercab : pas de ligne à horaire' : 'Aucune ligne sur le tracé');
@@ -1181,17 +1223,18 @@
       const parts = [['En course', c.loaded, '#ff5c93'], ['En approche ou à vide', c.toPickup + c.reposition, '#ff9cbd'], ['Libres', c.idle, '#5a3a4c'], ['En recharge', c.charging, '#2b3d54']];
       $('cab-split').innerHTML = parts.map(([, v, col]) => `<span style="flex:0 0 ${(v / tot) * 100}%;background:${col}"></span>`).join('');
       $('cab-legend').innerHTML = parts.map(([l, v, col]) => `<li><span><i style="background:${col}"></i>${l}</span><b>${fmt.format(v)}</b></li>`).join('');
-      kpi('k-rides', fmt.format(s.cab.rides)); kpi('k-cwait', fmt1.format(s.cab.avgWait), 'min');
-      kpi('k-empty', fmt.format(s.cab.emptyShare * 100), '%'); kpi('k-unserved', fmt.format(s.cab.unserved));
-      kpi('k-cspeed', s.cab.speed ? fmt.format(s.cab.speed) : '–', 'km/h');
-      kpi('k-pooled', fmt.format(s.cab.rides > 0 ? Math.min(100, (s.cab.pooled / s.cab.rides) * 100) : 0), '%');
+      const C = R.cab;
+      kpi('k-rides', fmt.format(C.rides)); kpi('k-cwait', fmt1.format(C.avgWait), 'min');
+      kpi('k-empty', fmt.format(C.emptyShare * 100), '%'); kpi('k-unserved', fmt.format(C.unserved));
+      kpi('k-cspeed', C.speed ? fmt.format(C.speed) : '–', 'km/h');
+      kpi('k-pooled', fmt.format(C.rides > 0 ? Math.min(100, (C.pooled / C.rides) * 100) : 0), '%');
       $('row-pooled').hidden = !sim.scenario.pool;
     }
     $('sec-econ').hidden = !L && !F;
     if (L || F) {
       // cumul des journées enchaînées depuis le dernier départ, journée en cours comprise (la fin de journée à 5 h ne le
       // coupe pas) ; recalculé à chaque affichage, donc avec les coûts en vigueur
-      const runList = sim.runSummaries(), e = TQ.economicsTotal(runList);
+      const e = TQ.economicsTotal(runList);
       const since = 'depuis le dernier changement de scénario, la dernière reprise (« Reprendre à ») ou le dernier calcul de journée';
       // le texte suit les journées gardées par le moteur (sim.run), pas seulement e.days : à 5 h pile la journée en cours
       // est vide mais le cumul contient déjà la journée qui vient de finir
@@ -1212,9 +1255,9 @@
       $('k-net').style.color = e.net < 0 ? 'var(--bad)' : 'var(--ok)';
       setText('k-capex', `Investissement à amortir : ${e.parts.map((p) => `${moneyText(p.capex)} (${p.kind === 'tram' ? 'tramway' : p.kind === 'bus' ? 'voies réservées et bus' : 'Cybercab et recharge'})`).join(' + ')}.`);
     }
-    setText('k-co2', fmt1.format(Math.abs(s.co2Avoided)));
+    setText('k-co2', fmt1.format(Math.abs(R.co2Avoided)));
     setText('k-co2-title', s.scenario.auto ? replacedTripsCO2 + ' et l’électrification du parc' : replacedTripsCO2);
-    setText('k-co2-label', s.co2Avoided >= 0 ? 'tonnes évitées depuis le départ' : 'tonnes ajoutées depuis le départ');
+    setText('k-co2-label', (R.co2Avoided >= 0 ? 'tonnes évitées depuis le départ' : 'tonnes ajoutées depuis le départ') + (ranDays ? `, ${daysText}` : ''));
     drawChart(lineHex);
     if ($('dlg-compare').open && state.histLen !== sim.history.length) renderCompare();
   }
@@ -1245,20 +1288,21 @@
 
   /** Barres divergentes : résultat de l'exploitant et bilan pour la société, à la même échelle. */
   function econChart() {
-    const rows = sim.history.filter((s) => s.line || s.cab || s.scenario.auto).map((s) => { const a = TQ.economics(s).annual; return { label: s.label, v: [a.net, a.society.net] }; });
+    const rows = sim.history.filter((s) => s.line || s.cab || s.scenario.auto).map((s) => { const a = TQ.economics(s).annual; return { label: s.label, day: dayText(s.scenario.date, s.scenario.winter), v: [a.net, a.society.net] }; });
     if (!rows.length) return '';
     const top = Math.max(1, ...rows.flatMap((r) => r.v.map(Math.abs)));
     const bar = (v, cls) => `<div class="dv ${cls}"><i style="${v < 0 ? 'right' : 'left'}:50%;width:${((Math.abs(v) / top) * 50).toFixed(2)}%;background:var(--${v < 0 ? 'bad' : 'ok'})"></i><b style="${v < 0 ? 'left' : 'right'}:calc(50% + 6px)">${moneyText(v)}</b></div>`;
     return `<div class="dvchart" role="img" aria-label="Résultat de l'exploitant et bilan pour la société, par scénario">
       <p class="dvkey"><span><i class="k1"></i>Résultat de l'exploitant</span><span><i class="k2"></i>Bilan pour la société</span><span>pertes à gauche, gains à droite</span></p>
-      ${rows.map((r) => `<div class="dvrow"><span>${esc(r.label)}</span><div>${bar(r.v[0], 'a')}${bar(r.v[1], 'b')}</div></div>`).join('')}</div>`;
+      ${rows.map((r) => `<div class="dvrow"><span>${esc(r.label)}<br><small>${esc(r.day)}</small></span><div>${bar(r.v[0], 'a')}${bar(r.v[1], 'b')}</div></div>`).join('')}</div>`;
   }
 
   function econRow(s) {
-    if (!s.line && !s.cab && !(s.scenario && s.scenario.auto)) return `<tr><td>${esc(s.label)}</td>${'<td>–</td>'.repeat(11)}</tr>`;
+    const day = `<td>${esc(dayText(s.scenario.date, s.scenario.winter))}</td>`;
+    if (!s.line && !s.cab && !(s.scenario && s.scenario.auto)) return `<tr><td>${esc(s.label)}</td>${day}${'<td>–</td>'.repeat(11)}</tr>`;
     const e = TQ.economics(s), a = e.annual, y = a.society;
     const signed = (v, strong) => (v == null ? '<td>–</td>' : `<td style="color:var(--${v < 0 ? 'bad' : 'ok'})${strong ? ';font-weight:600' : ''}">${moneyText(v)}</td>`);
-    return `<tr><td>${esc(s.label)}</td><td>${moneyText(e.capex)}</td><td>${moneyText(a.revenue)}</td><td>${moneyText(a.opex)}</td><td>${moneyText(a.capital)}</td>${signed(a.net, true)}${signed(y.riders)}${signed(y.carFree)}${signed(y.drivers)}${signed(y.co2)}${signed(y.rtcLoss)}${signed(y.net, true)}</tr>`;
+    return `<tr><td>${esc(s.label)}</td>${day}<td>${moneyText(e.capex)}</td><td>${moneyText(a.revenue)}</td><td>${moneyText(a.opex)}</td><td>${moneyText(a.capital)}</td>${signed(a.net, true)}${signed(y.riders)}${signed(y.carFree)}${signed(y.drivers)}${signed(y.co2)}${signed(y.rtcLoss)}${signed(y.net, true)}</tr>`;
   }
 
   // Cache raw daily results so both sides always use the current cost sliders.
@@ -1301,10 +1345,10 @@
       const current = TQ.economics(s).annual.society.net;
       if (baseline) {
         const zero = TQ.economics(baseline).annual.society.net;
-        return `<tr><th scope="row">${esc(s.label)}</th><td>${signedMoney(zero)}</td><td>${signedMoney(current)}</td><td><strong>${signedMoney(current - zero)}</strong></td></tr>`;
+        return `<tr><th scope="row">${esc(s.label)}<br><small>${esc(dayText(s.scenario.date, s.scenario.winter))}</small></th><td>${signedMoney(zero)}</td><td>${signedMoney(current)}</td><td><strong>${signedMoney(current - zero)}</strong></td></tr>`;
       }
       const status = failedDays.has(scenarioKey(scenario)) ? 'Calcul indisponible. Rouvrez la comparaison pour réessayer.' : 'Calcul de la journée à 0 %…';
-      return `<tr><th scope="row">${esc(s.label)}</th><td>${status}</td><td>${signedMoney(current)}</td><td>–</td></tr>`;
+      return `<tr><th scope="row">${esc(s.label)}<br><small>${esc(dayText(s.scenario.date, s.scenario.winter))}</small></th><td>${status}</td><td>${signedMoney(current)}</td><td>–</td></tr>`;
     }).join('');
     return `<h3>Effet des déplacements faits sans auto</h3>
       <p class="hint">Bilan annuel pour la société avec la même flotte, les mêmes réglages et la même demande. L’écart mesure l’effet de passer de 0 % à la part choisie.</p>
@@ -1320,7 +1364,7 @@
       const result = other
         ? `<td>${fmt.format(other.cab.rides)}</td><td>${signedMoney(TQ.economics(other).annual.net)}</td>`
         : `<td colspan="2">${status}</td>`;
-      return `<tr><th scope="row">${esc(s.label)}</th><td>${fmt.format(s.cab.rides)}</td><td>${signedMoney(TQ.economics(s).annual.net)}</td>${result}</tr>`;
+      return `<tr><th scope="row">${esc(s.label)}<br><small>${esc(dayText(s.scenario.date, s.scenario.winter))}</small></th><td>${fmt.format(s.cab.rides)}</td><td>${signedMoney(TQ.economics(s).annual.net)}</td>${result}</tr>`;
     }).join('');
     if (!rows) return '';
     return `<h3>Quel prix le voyageur utilise-t-il pour choisir le Cybercab ?</h3>
@@ -1334,13 +1378,24 @@
     $('compare-fares').hidden = showFareComparison || !sim.history.some(s => s.cab);
     for (const s of sim.history) comparisonDays.set(scenarioKey(s.scenario), s);
     if (!sim.history.length) { el.innerHTML = '<p class="empty">Aucune journée terminée pour l\'instant. Utilisez un des boutons ci-dessus, ou laissez tourner la simulation jusqu\'à 5 h.</p>'; return; }
-    const rows = sim.history.map((s) => `<tr><td>${esc(s.label)}</td><td>${fmt.format(s.line ? s.line.boardings : 0)}</td><td>${s.line ? fmt.format(s.line.peakLoad) : '–'}</td><td>${s.line ? fmt1.format(s.line.speed) : '–'}</td><td>${s.cab ? fmt.format(s.cab.rides) : '–'}</td><td>${s.cab ? fmt.format(s.cab.emptyShare * 100) + ' %' : '–'}</td><td>${fmt.format(s.carsRemoved)}</td><td>${fmt1.format(s.avgSpeed)}</td><td>+${fmt.format(s.congestion * 100)} %</td><td>${fmt1.format(s.co2Avoided)}</td></tr>`).join('');
+    const rows = sim.history.map((s) => `<tr><td>${esc(s.label)}</td><td>${esc(dayText(s.scenario.date, s.scenario.winter))}</td><td>${fmt.format(s.line ? s.line.boardings : 0)}</td><td>${s.line ? fmt.format(s.line.peakLoad) : '–'}</td><td>${s.line ? fmt1.format(s.line.speed) : '–'}</td><td>${s.cab ? fmt.format(s.cab.rides) : '–'}</td><td>${s.cab ? fmt.format(s.cab.emptyShare * 100) + ' %' : '–'}</td><td>${fmt.format(s.carsRemoved)}</td><td>${fmt1.format(s.avgSpeed)}</td><td>+${fmt.format(s.congestion * 100)} %</td><td>${fmt1.format(s.co2Avoided)}</td></tr>`).join('');
     const co2Heading = sim.history.some(s => s.scenario.auto) ? replacedTripsCO2 + ' et, si activée, l’électrification du parc' : replacedTripsCO2;
-    el.innerHTML = `${carFreeComparison()}${fareComparison()}<div class="table-wrap"><table><thead><tr><th>Scénario</th><th>Montées sur la ligne</th><th>Charge max. par heure</th><th>Vitesse de la ligne (km/h)</th><th>Passagers Cybercab</th><th>Km à vide</th><th>Trajets auto évités</th><th>Vitesse auto (km/h)</th><th>Temps perdu</th><th>${co2Heading} (t)</th></tr></thead><tbody>${rows}</tbody></table></div>
+    // seules des journées du même type de jour se comparent : sinon, le signaler
+    const kinds = [...new Set(sim.history.map((s) => dayKind(s.scenario.date)))];
+    const kindNote = kinds.length > 1
+      ? `<p class="warn" role="note">Ces journées ne sont pas du même type de jour (${kinds.map((k) => esc(dayKindText(sim.history.find((s) => dayKind(s.scenario.date) === k).scenario.date))).join(' ; ')}). Comparez seulement les lignes d’un même type de jour.</p>`
+      : '';
+    // journées datées : l'année reste 300 fois la journée, et la référence des automobilistes reste un jour type
+    const dated = sim.history.some((s) => s.scenario.date != null);
+    const datedNote = dated
+      ? '<p class="hint">Une journée datée est ici ramenée à l’année comme un jour type, soit 300 fois la journée : ce n’est pas un bilan sur un an. Son « Temps des automobilistes » est comparé à une journée de référence de jour type (automne, ou hiver de décembre à mars). Un jour moins chargé (samedi, férié, vacances) y paraît donc gagner du temps, et un jour plus chargé (été) en perdre, sans que le scénario y soit pour quelque chose.</p>'
+      : '';
+    el.innerHTML = `${kindNote}${carFreeComparison()}${fareComparison()}<div class="table-wrap"><table><thead><tr><th>Scénario</th><th>Jour</th><th>Montées sur la ligne</th><th>Charge max. par heure</th><th>Vitesse de la ligne (km/h)</th><th>Passagers Cybercab</th><th>Km à vide</th><th>Trajets auto évités</th><th>Vitesse auto (km/h)</th><th>Temps perdu</th><th>${co2Heading} (t)</th></tr></thead><tbody>${rows}</tbody></table></div>
       <p class="hint">Les émissions du nouveau service sont déduites. Une valeur négative indique une hausse des émissions. Les changements d’itinéraire des autos restantes sont exclus.</p>
-      <h3>Rentabilité, par année</h3>
+      <h3>${dated ? 'Rentabilité, journée ramenée à l’année (× 300)' : 'Rentabilité, par année'}</h3>
+      ${datedNote}
       ${econChart()}
-      <div class="table-wrap"><table><thead><tr><th>Scénario</th><th>Investissement</th><th>Recettes</th><th>Exploitation</th><th>Investissement étalé</th><th>Résultat de l'exploitant</th><th>Gain des voyageurs</th><th>Déplacements faits sans auto</th><th>Temps des automobilistes</th><th>Valeur du ${co2Heading}</th><th>Recettes des autobus du RTC</th><th>Bilan pour la société</th></tr></thead><tbody>${sim.history.map(econRow).join('')}</tbody></table></div>
+      <div class="table-wrap"><table><thead><tr><th>Scénario</th><th>Jour</th><th>Investissement</th><th>Recettes</th><th>Exploitation</th><th>Investissement étalé</th><th>Résultat de l'exploitant</th><th>Gain des voyageurs</th><th>Déplacements faits sans auto</th><th>Temps des automobilistes</th><th>Valeur du ${co2Heading}</th><th>Recettes des autobus du RTC</th><th>Bilan pour la société</th></tr></thead><tbody>${sim.history.map(econRow).join('')}</tbody></table></div>
       <p class="hint">Le bilan pour la société additionne le résultat de l'exploitant et les cinq colonnes qui le précèdent. « Déplacements faits sans auto » ne se remplit qu'avec l'option d'abandon de l'auto : c'est l'écart de coût généralisé (temps, attente, marche, tarif, stationnement, coût au kilomètre) entre l'auto et le mode de remplacement, sans les économies de possession de l'auto. « Recettes des autobus du RTC » est négatif quand des usagers quittent les autobus, positif quand des déplacements faits sans auto s'y reportent. Le résultat de l'exploitant et le bilan changent avec les curseurs « Hypothèses de coûts ».</p>`;
   }
 
@@ -1382,6 +1437,7 @@
       const S = TQ.Simulation.STEP, grid = (x) => TQ.PARAMS.dayStart + Math.round((x - TQ.PARAMS.dayStart) / S) * S;
       const from = grid(Math.max(t - 5400, sim.tDayEnd - 86400)); // sans remonter avant le début de la journée
       sim.reset(from); sim.step(grid(t) - from);
+      state.startDate = sim.scenario.date || null; // nouveau départ, à la date en cours
       writeHash();
     };
     // un seul mode à la fois : choisir le tramway ou l'autobus retire la flotte, choisir le Cybercab ou une zone retire la ligne,
@@ -1412,7 +1468,9 @@
     // journées complètes calculées d'un seul coup, depuis 5 h ; l'animation attend pendant ce temps
     const batchButtons = [['run-day', $('run-day').textContent], ['run-all', $('run-all').textContent]];
     const runBatch = (list) => {
-      const batch = (state.batch = { queue: list.slice(), total: list.length });
+      // toutes les journées du lot partent de la date de départ (sinon chacune prendrait le lendemain de la précédente) ;
+      // à la fin, la simulation est au lendemain, mais le lien et « Démarrer à » gardent la journée simulée
+      const batch = (state.batch = { queue: list.slice(), total: list.length, date: state.startDate });
       const done = () => {
         if (state.batch === batch) state.batch = null;
         batchButtons.forEach(([id, label]) => { $(id).disabled = false; $(id).textContent = label; });
@@ -1421,7 +1479,7 @@
       const next = () => {
         if (state.batch !== batch) return done();
         if (!batch.queue.length) return done();
-        exclusive(Object.assign(sim.scenario, batch.queue.shift()));
+        exclusive(Object.assign(sim.scenario, { date: batch.date }, batch.queue.shift()));
         sim.reset(TQ.PARAMS.dayStart);
         const n = sim.history.length, rank = batch.total - batch.queue.length;
         const chunk = () => {
@@ -1451,17 +1509,36 @@
       const before = scenarioKey(sim.scenario), was3d = state.view3d;
       for (const id in COSTS) econSet(COSTS[id][0], dig(TQ.ECON_DEFAULTS, COSTS[id][0]));
       const sc = exclusive(Object.assign({ fleet: 3000, farePerKm: TQ.PARAMS.cab.farePerKm, winter: false, pool: false, carFree: 0, auto: false }, readHash()));
-      if (scenarioKey(sc) !== before) { state.batch = null; sim.scenario = sc; sim.reset(TQ.PARAMS.dayStart); }
+      if (scenarioKey(sc) !== before || (sc.date || null) !== state.startDate) { state.batch = null; sim.scenario = sc; sim.reset(TQ.PARAMS.dayStart); state.startDate = sc.date || null; }
       if (state.view3d !== was3d) setView3d(state.view3d);
       if (state.view3d) setPhoto(state.wantPhoto);
       syncControls(); lineHint(); writeHash(); // l'adresse montre le scénario réellement simulé
       if ($('dlg-compare').open) renderCompare();
     });
     $('winter').addEventListener('change', (e) => restart(sim.t, { winter: e.target.checked }));
+    // « Démarrer à » : la journée choisie part de 5 h ; avec une date, les journées s'enchaînent ensuite
+    const startError = (show) => { $('start-error').hidden = !show; };
+    const startAt = (date) => {
+      startError(false);
+      if (state.startDate === date && (sim.scenario.date || null) === date) return;
+      state.batch = null; sim.scenario.date = date; sim.reset(TQ.PARAMS.dayStart); state.startDate = date;
+      syncControls(); writeHash();
+    };
+    $('start-date').addEventListener('change', (e) => {
+      const v = e.target.value, c = $('start-custom');
+      if (v !== 'custom') return startAt(v || null);
+      c.hidden = false; if (!c.value) c.value = state.startDate || '2026-10-14';
+      startAt(c.value); c.focus();
+    });
+    $('start-custom').addEventListener('change', (e) => {
+      // une date vide ou hors de 2026-2027 est refusée : le champ revient à la date de départ, avec un message
+      try { TQ.dayInfo(e.target.value); } catch (err) { e.target.value = state.startDate || ''; startError(true); return; }
+      startAt(e.target.value);
+    });
     $('auto').addEventListener('change', (e) => { $('auto-hint').hidden = !e.target.checked; restart(sim.t, { auto: e.target.checked }); syncControls(); });
     document.querySelectorAll('.starts button').forEach((b) => b.addEventListener('click', () => {
       const h = +b.dataset.start;
-      if (h * 3600 <= TQ.PARAMS.dayStart) { state.batch = null; sim.reset(TQ.PARAMS.dayStart); } else restart(h * 3600);
+      if (h * 3600 <= TQ.PARAMS.dayStart) { state.batch = null; sim.reset(TQ.PARAMS.dayStart); state.startDate = sim.scenario.date || null; syncControls(); writeHash(); } else { restart(h * 3600); syncControls(); }
     }));
     for (const k of ['cars', 'roads', 'zone']) $('ly-' + k).addEventListener('change', (e) => { state.layers[k] = e.target.checked; });
     $('play').addEventListener('click', () => { state.playing = !state.playing; $('play').textContent = state.playing ? '❚❚' : '▶'; $('play').setAttribute('aria-label', state.playing ? 'Mettre en pause' : 'Reprendre'); });

@@ -164,6 +164,58 @@ Le dossier `web/` est un site statique : il se publie tel quel, par exemple sur 
   dans la circulation générale, avec les autos, le long du tracé ou sur le réseau élargi.
 - **Hypothèses de coûts** : cinq curseurs recalculent la rentabilité sans relancer la journée.
 - **Copier le lien de ce scénario** : l'adresse contient le scénario et les coûts choisis.
+- **Démarrer à** : le jour type d'automne (par défaut, chiffres ci-dessus), une saison ou une date de 2026-2027.
+  Avec une date, les journées s'enchaînent, et les compteurs s'additionnent depuis le départ.
+
+## 📅 Calendrier
+
+Sans date, la journée simulée est le jour type d'automne : un jour de semaine de l'enquête Origine-Destination 2023.
+Avec une date, trois choses changent.
+
+- **Le nombre de déplacements**, heure par heure, par rapport à ce jour type :
+  - le mois (janvier 0,89 ; juillet 1,09 ; septembre à novembre 1,00) ;
+  - les vacances de la construction : pointe du matin 0,73, pointe du soir 0,93, journée 0,98 ;
+  - août avant la rentrée et la semaine de la rentrée : pointe du matin 0,88 puis 0,95 ;
+  - les Fêtes (jours de semaine du 21 au 31 décembre, mesurés du 22 au 31) : pointe du matin 0,41, journée 0,77 ;
+    du 2 au 5 janvier : 0,85 (hypothèse) ;
+  - les fériés (par exemple Noël 0,56, jour de l'An 0,48 ; le 2 janvier, chômé dans la fonction publique : 0,72,
+    hypothèse) ;
+  - le samedi (0,88) et le dimanche (0,79), avec leur propre profil horaire, sans pointe du matin.
+- **Les voies réservées de pointe** : elles ne s'appliquent que du lundi au vendredi, selon OpenStreetMap.
+  Les fins de semaine et les fériés (Vendredi saint compris), les autos ont toutes leurs voies.
+- **L'horaire de la ligne** : les fins de semaine et les fériés, pas de pointe. Le passage reste celui du jour
+  (8 minutes pour le tramway) jusqu'à 20 h, puis celui du soir. C'est ce que font les Métrobus du RTC.
+
+De décembre à mars, la journée est aussi une journée d'hiver (la case « Journée d'hiver » l'impose toute l'année).
+
+D'où viennent les chiffres : les comptages du ministère des Transports (2024 et 2025) sur l'A-540, l'A-73 et l'A-40,
+les dates de la CCQ et du calendrier scolaire, et les horaires du RTC. Le détail et le statut de chaque facteur
+(sourcé, analogue ou hypothèse) sont dans le panneau « Hypothèses ».
+
+Tramway seul, mesuré sur une journée complète :
+
+| Journée | Déplacements | dont 7 h à 8 h | Montées du tramway |
+|---|---|---|---|
+| Jour type d'automne, ou mercredi 14 octobre 2026 | 1 863 835 | 190 180 | 75 570 |
+| Samedi 17 octobre 2026 | 1 646 855 | 45 645 | 52 245 |
+| Mercredi 22 juillet 2026 (construction) | 1 838 215 | 139 835 | 71 470 |
+| Vendredi 25 décembre 2026 (Noël, hiver) | 1 044 260 | 23 555 | 31 845 |
+| Mercredi 20 janvier 2027 (hiver) | 1 663 885 | 169 805 | 67 020 |
+
+Limites :
+
+- L'enquête O-D ne couvre pas les fins de semaine. Un samedi garde les trajets d'un jour de semaine (d'où à où,
+  et part de chaque mode) : seuls leur nombre et leur heure changent. Les sorties de magasinage et de loisirs ne
+  sont pas déplacées vers les commerces.
+- Les facteurs viennent d'autoroutes, souvent d'un seul site et d'une seule année. Aucun comptage public des
+  artères de la Ville n'existe. On applique un débit de véhicules à des déplacements : c'est une approximation.
+- Le profil de fin de semaine est celui de l'A-40. Le jour de semaine, lui, suit l'enquête O-D, plus marquée aux
+  pointes : de 15 h à 18 h, un samedi simulé fait 0,60 d'un jour de semaine, contre 0,89 mesuré sur l'A-40.
+- Aucune hausse du débit n'est mesurée avant Noël : décembre est un peu plus bas que l'automne. La congestion de
+  décembre (neige, commerces) n'est pas reproduite.
+- La part du transport collectif ne change pas selon la saison.
+- La rentabilité d'une journée datée est encore ramenée à l'année comme un jour type (300 fois la journée), et le
+  temps des automobilistes est comparé à une journée de référence de jour type. Un vrai bilan sur un an est prévu à part.
 
 ## 📊 Ce que le modèle reproduit
 

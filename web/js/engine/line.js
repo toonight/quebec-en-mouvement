@@ -3,9 +3,10 @@
   const TQ = typeof window !== 'undefined' ? window.TQ : globalThis.TQ;
 
   class TransitLine {
-    /** kind : 'tram' | 'bus' */
-    constructor(lineData, kind, rnd, winter) {
+    /** kind : 'tram' | 'bus' ; service : grille horaire, 'semaine' (par défaut) ou 'fin-de-semaine' (TQ.servicePeriod) */
+    constructor(lineData, kind, rnd, winter, service) {
       this.kind = kind;
+      this.service = service || 'semaine';
       this.p = TQ.PARAMS.line[kind];
       this.rnd = rnd;
       this.winter = !!winter;
@@ -37,11 +38,11 @@
     }
 
     headway(t) {
-      const per = TQ.servicePeriod(t);
+      const per = TQ.servicePeriod(t, this.service);
       return per === 'closed' ? 0 : this.p.headway[per] * 60;
     }
 
-    isOpen(t) { return TQ.servicePeriod(t) !== 'closed'; }
+    isOpen(t) { return TQ.servicePeriod(t, this.service) !== 'closed'; }
 
     /** Temps de marche entre deux stations adjacentes (s), hors arrêt. */
     runTime(i, j, random) {

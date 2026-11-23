@@ -740,3 +740,232 @@ test('Cybercab : une attente déjà courte n\'est pas ramenée vers 4 minutes', 
   assert.ok(F.waitEma[1] >= 4 && F.waitEma[1] < 4.01 && F.waitEma[0] === 2);
   assert.ok(Math.abs(F.perceivedWait(0) - 2.5) < 1e-3);
 });
+
+test('calendrier : jours fériés 2026 et 2027, Pâques, vacances de la construction, Noël, fin de semaine', () => {
+  const D = TQ.dayInfo;
+  const ferie = (d, key) => { const i = D(d); assert.strictEqual(i.holiday, key, d); assert.strictEqual(i.type, 'ferie', d); };
+  for (const [d, k] of [['2026-01-01', 'jour-de-l-an'], ['2026-04-06', 'lundi-de-paques'], ['2026-05-18', 'patriotes'], ['2026-06-24', 'fete-nationale'], ['2026-07-01', 'fete-du-canada'], ['2026-09-07', 'fete-du-travail'], ['2026-10-12', 'action-de-grace'], ['2026-12-25', 'noel'],
+    ['2027-01-01', 'jour-de-l-an'], ['2027-03-29', 'lundi-de-paques'], ['2027-05-24', 'patriotes'], ['2027-06-24', 'fete-nationale'], ['2027-07-01', 'fete-du-canada'], ['2027-09-06', 'fete-du-travail'], ['2027-10-11', 'action-de-grace'], ['2027-12-25', 'noel']]) ferie(d, k);
+  // Vendredi saint : jour férié repéré, mais journée presque normale (jour ouvrable)
+  for (const d of ['2026-04-03', '2027-03-26']) { const i = D(d); assert.strictEqual(i.holiday, 'vendredi-saint'); assert.strictEqual(i.type, 'ouvrable'); assert.strictEqual(i.weekday, 5); }
+  // ... férié selon la loi : voies réservées de pointe libres (règlement « à l'exception des jours fériés »), grille de semaine
+  for (const d of ['2026-04-03', '2027-03-26']) { assert.strictEqual(D(d).peakLanes, false, d); assert.strictEqual(D(d).service, 'semaine', d); }
+  assert.strictEqual(D('2026-04-02').peakLanes, true);
+  // 2 janvier : chômé dans la fonction publique, comme les 24, 26 et 31 décembre (vendredi en 2026, samedi en 2027)
+  for (const d of ['2026-01-02', '2027-01-02']) {
+    const i = D(d); assert.strictEqual(i.holiday, 'lendemain-du-jour-de-l-an', d); assert.strictEqual(i.type, 'ferie', d);
+    assert.strictEqual(i.total, 0.72, d); assert.strictEqual(i.peakLanes, false, d); assert.strictEqual(i.service, 'fin-de-semaine', d);
+  }
+  assert.strictEqual(D('2026-01-05').type, 'ouvrable'); assert.strictEqual(D('2026-01-05').total, 0.85);
+  // dimanche de Pâques : un dimanche ordinaire du calendrier
+  assert.strictEqual(D('2026-04-05').type, 'dimanche'); assert.strictEqual(D('2026-04-05').holiday, null);
+  // Noël 2026 : vendredi ; Noël 2027 : samedi, toujours férié
+  assert.strictEqual(D('2026-12-25').weekday, 5); assert.strictEqual(D('2027-12-25').weekday, 6);
+  assert.strictEqual(D('2026-12-25').label, 'Noël'); assert.strictEqual(D('2026-12-25').special, 'fetes');
+  // bornes de la CCQ : du dimanche 19 juillet au samedi 1er août 2026, du 25 juillet au 7 août 2027
+  for (const [d, inside] of [['2026-07-18', false], ['2026-07-19', true], ['2026-08-01', true], ['2026-08-02', false], ['2027-07-24', false], ['2027-07-25', true], ['2027-08-07', true], ['2027-08-08', false]]) {
+    assert.strictEqual(D(d).special === 'construction', inside, d);
+  }
+  assert.strictEqual(D('2026-07-22').label, 'vacances de la construction');
+  assert.strictEqual(D('2026-08-31').special, 'rentree');
+  assert.strictEqual(D('2027-03-03').special, 'relache');
+  assert.strictEqual(D('2027-01-04').special, 'retour-des-fetes');
+  // vendredi -> samedi, en calcul de date UTC (sans fuseau, y compris au changement d'heure)
+  assert.strictEqual(D('2026-07-24').type, 'ouvrable');
+  assert.strictEqual(TQ.addDays('2026-07-24', 1), '2026-07-25');
+  assert.strictEqual(D('2026-07-25').type, 'samedi'); assert.strictEqual(D('2026-07-26').type, 'dimanche');
+  assert.strictEqual(TQ.addDays('2026-03-07', 1), '2026-03-08'); assert.strictEqual(TQ.addDays('2026-03-08', 1), '2026-03-09');
+  assert.strictEqual(TQ.addDays('2026-10-31', 1), '2026-11-01'); assert.strictEqual(TQ.addDays('2026-12-31', 1), '2027-01-01');
+  assert.strictEqual(TQ.addDays('2027-03-01', -1), '2027-02-28');
+  assert.strictEqual(TQ.formatDate('2026-08-01'), 'samedi 1er août 2026');
+  // saisons et hiver (décembre à mars)
+  assert.strictEqual(D('2026-07-08').season, 'été'); assert.strictEqual(D('2027-01-20').season, 'hiver');
+  assert.ok(D('2027-01-20').winter && D('2027-03-31').winter && !D('2027-04-01').winter && D('2026-12-01').winter && !D('2026-11-30').winter);
+  // jour neutre : jour type d'automne, tous les facteurs valent 1 ; de même un jour ouvrable de septembre à novembre
+  const n = D(null);
+  assert.strictEqual(n.type, 'ouvrable-automne'); assert.strictEqual(n.date, null); assert.strictEqual(n.profile, null);
+  assert.strictEqual(n.label, 'Jour type d\'automne'); assert.strictEqual(n.winter, false);
+  for (const d of [null, '2026-09-16', '2026-10-14', '2026-11-25', '2027-10-20']) { assert.deepStrictEqual(D(d).f, { A: 1, H: 1, P: 1, N: 1 }, d); assert.strictEqual(D(d).profile, null); assert.strictEqual(D(d).total, 1); }
+  // facteurs datés : construction, Fêtes, hiver (janvier), samedi, Noël
+  assert.deepStrictEqual(D('2026-07-22').f, { A: 0.73, H: 1.08, P: 0.93, N: 1.27 });
+  assert.deepStrictEqual(D('2026-12-29').f, { A: 0.41, H: 0.97, P: 0.76, N: 0.97 });
+  assert.deepStrictEqual(D('2027-01-20').f, { A: 0.89, H: 0.89, P: 0.89, N: 0.89 });
+  assert.strictEqual(D('2026-07-25').f, null); assert.ok(D('2026-07-25').profile); assert.ok(Math.abs(D('2026-07-25').total - 0.98 * 0.88) < 1e-12);
+  assert.strictEqual(D('2026-12-25').total, 0.56);
+  // férié une fin de semaine : le plus bas des deux facteurs (26 décembre 2026, un samedi des Fêtes : 0,77 × 0,88 < 0,72)
+  assert.ok(Math.abs(D('2026-12-26').total - 0.77 * 0.88) < 1e-12);
+  // ... et dans l'autre sens : Noël 2027, un samedi (0,56 < 0,77 × 0,88), puis le 26, un dimanche (0,77 × 0,79 < 0,72)
+  assert.strictEqual(D('2027-12-25').total, 0.56);
+  assert.ok(Math.abs(D('2027-12-26').total - 0.77 * 0.79) < 1e-12);
+  // les dates proposées par la page tombent bien le jour annoncé
+  for (const [d, w] of [['2026-07-08', 3], ['2026-07-22', 3], ['2026-08-31', 1], ['2026-12-16', 3], ['2026-12-29', 2], ['2027-01-20', 3]]) assert.strictEqual(D(d).weekday, w, d);
+});
+
+test('calendrier : une date hors de 2026-2027 ou mal formée est refusée, sans toucher à la simulation', () => {
+  for (const d of ['2025-12-31', '2028-01-01', '2026-02-30', '2026-13-01', '22 juillet', '']) assert.throws(() => TQ.dayInfo(d), /Date refusée/, d);
+  assert.throws(() => new TQ.Simulation(data, { scenario: { line: 'none', cab: 'off', date: '2028-01-01' } }), /Date refusée/);
+  const sim = new TQ.Simulation(data, { scenario: { line: 'none', cab: 'off', date: '2026-07-22' } });
+  sim.step(600);
+  const t = sim.t;
+  assert.throws(() => sim.setScenario({ date: '2025-06-01' }), /Date refusée/);
+  assert.strictEqual(sim.scenario.date, '2026-07-22'); assert.strictEqual(sim.date, '2026-07-22'); assert.strictEqual(sim.t, t);
+});
+
+test('date neutre : un mercredi d\'octobre 2026 donne le même résumé que le jour type, tant que les facteurs valent 1', () => {
+  const go = (sc) => { const sim = new TQ.Simulation(data, { scenario: sc }); for (let i = 0; i < 3 * 360; i++) sim.step(10); return sim.summary(); };
+  for (const sc of [{ line: 'tram', cab: 'off' }, { line: 'none', cab: 'corridor', fleet: 500 }]) {
+    const a = go(sc), b = go(Object.assign({ date: '2026-10-14' }, sc));
+    // sans date, le résumé n'a pas de champ date (même forme qu'avant le calendrier)
+    assert.ok(!('date' in a.scenario));
+    assert.strictEqual(b.scenario.date, '2026-10-14');
+    delete b.scenario.date;
+    assert.deepStrictEqual(b, a);
+    // une date posée à null se comporte comme l'absence de date
+    assert.deepStrictEqual(go(Object.assign({ date: null }, sc)), a);
+  }
+});
+
+test('journées enchaînées : avec une date, la fin de journée passe au lendemain ; sans date, rien ne change', () => {
+  const start = TQ.PARAMS.dayStart + 86400 - 1800; // 4 h 30
+  const sim = new TQ.Simulation(data, { scenario: { line: 'none', cab: 'off', date: '2026-07-24' }, start });
+  assert.strictEqual(sim.dayInfo.type, 'ouvrable');
+  sim.step(3600);
+  assert.strictEqual(sim.date, '2026-07-25'); assert.strictEqual(sim.scenario.date, '2026-07-25');
+  assert.strictEqual(sim.dayInfo.type, 'samedi'); assert.strictEqual(sim.day, 2);
+  // chaque résumé porte la date de sa journée
+  assert.strictEqual(sim.run[0].scenario.date, '2026-07-24'); assert.strictEqual(sim.summary().scenario.date, '2026-07-25');
+  // journée complète : elle entre dans la comparaison avec sa date
+  while (!sim.history.length) sim.step(10);
+  assert.strictEqual(sim.history[0].scenario.date, '2026-07-25'); assert.strictEqual(sim.date, '2026-07-26');
+  // sans date : le jour type se rejoue
+  const neutral = new TQ.Simulation(data, { scenario: { line: 'none', cab: 'off' }, start });
+  neutral.step(3600);
+  assert.strictEqual(neutral.date, null); assert.ok(!('date' in neutral.scenario)); assert.strictEqual(neutral.dayInfo.type, 'ouvrable-automne');
+  // à la fin du calendrier, la dernière date se rejoue
+  const last = new TQ.Simulation(data, { scenario: { line: 'none', cab: 'off', date: '2027-12-31' }, start });
+  last.step(3600);
+  assert.strictEqual(last.date, '2027-12-31');
+});
+
+test('compteurs cumulés : déplacements, répartition, CO2, montées par station et Cybercab s\'additionnent sur les journées', () => {
+  const start = TQ.PARAMS.dayStart + 86400 - 6 * 3600; // 23 h, la journée finit à 5 h (la ligne ferme de 1 h à 5 h)
+  const sum = (list, f) => list.reduce((a, s) => a + f(s), 0);
+  const close = (a, b, k) => assert.ok(Math.abs(a - b) <= 1e-6 * Math.max(1, Math.abs(b)), `${k} : ${a} contre ${b}`);
+  const sim = new TQ.Simulation(data, { scenario: { line: 'tram', cab: 'off', date: '2026-10-14' }, start });
+  for (let i = 0; i < 8 * 360; i++) sim.step(10); // jusqu'à 7 h : 6 h la veille, 2 h le jour même
+  const list = sim.runSummaries(), aux = sim.runAuxiliary(), R = TQ.runTotals(list, aux);
+  assert.strictEqual(list.length, 2); assert.strictEqual(aux.length, 2); assert.strictEqual(R.days, 2);
+  close(R.hours, 8, 'heures');
+  close(R.trips, sum(list, (s) => s.trips), 'déplacements');
+  for (const k of TQ.Simulation.MODES) close(R.modes[k], sum(list, (s) => s.modes[k]), k);
+  close(R.co2Avoided, sum(list, (s) => s.co2Avoided), 'CO2');
+  close(R.line.boardings, sum(list, (s) => s.line.boardings), 'montées');
+  assert.ok(R.line.boardings > list[1].line.boardings && list[0].line.boardings > 0);
+  // les montées par station de la veille et du jour s'additionnent, et leur somme redonne les montées
+  close(R.stationBoard.reduce((a, b) => a + b, 0), R.line.boardings, 'montées par station');
+  for (let j = 0; j < R.stationBoard.length; j++) close(R.stationBoard[j], aux[0].stationBoard[j] + sim.line.stationBoard[j], 'station ' + j);
+  // le résumé garde sa forme : les montées par station n'y sont pas
+  assert.ok(!('stationBoard' in list[1]) && !('stationBoard' in list[1].line));
+  // un changement de scénario remet tout à 0
+  sim.setScenario({ line: 'bus' });
+  assert.strictEqual(sim.run.length, 0); assert.strictEqual(sim.runAux.length, 0);
+  assert.strictEqual(TQ.runTotals(sim.runSummaries(), sim.runAuxiliary()).trips, 0);
+  // Cybercab : passagers, demandes et kilomètres s'additionnent ; les moyennes sont refaites sur les sommes
+  const cab = new TQ.Simulation(data, { scenario: { line: 'none', cab: 'corridor', fleet: 500 }, start });
+  for (let i = 0; i < 8 * 360; i++) cab.step(10);
+  const cl = cab.runSummaries(), C = TQ.runTotals(cl, cab.runAuxiliary()).cab;
+  for (const k of ['rides', 'unserved', 'pooled', 'vkmEmpty', 'vkmLoaded']) close(C[k], sum(cl, (s) => s.cab[k]), k);
+  assert.ok(C.rides > cl[1].cab.rides && cl[0].cab.rides > 0);
+  close(C.emptyShare, C.vkmEmpty / (C.vkmEmpty + C.vkmLoaded), 'km à vide');
+  const lo = Math.min(...cl.map((s) => s.cab.avgWait)), hi = Math.max(...cl.map((s) => s.cab.avgWait));
+  assert.ok(C.avgWait >= lo - 1e-9 && C.avgWait <= hi + 1e-9);
+  assert.ok(C.speed > 0);
+  // une seule journée : le cumul est la journée elle-même
+  const one = TQ.runTotals([cl[1]]);
+  assert.strictEqual(one.trips, cl[1].trips); assert.strictEqual(one.cab.rides, cl[1].cab.rides);
+  assert.strictEqual(TQ.runTotals([]).trips, 0);
+});
+
+// ---------------------------------------------------------------- calendrier : facteurs, voies réservées, grille horaire
+const ratesOf = (date) => { const sim = new TQ.Simulation(data, { scenario: { line: 'none', cab: 'off', date } }); return { rate: Array.from(sim.hourRate), sim }; };
+const sumH = (r, a, b) => { let x = 0; for (let h = a; h < b; h++) x += r[h]; return x; };
+
+test('calendrier : un jour neutre garde la demande du jour type, sans aucun calcul', () => {
+  const n = ratesOf(null);
+  assert.strictEqual(n.sim.hourRate, n.sim.baseRate);
+  for (const d of ['2026-10-14', '2026-09-16', '2026-11-25']) {
+    const s = new TQ.Simulation(data, { scenario: { line: 'none', cab: 'off', date: d } });
+    assert.strictEqual(s.hourRate, s.baseRate, d); assert.ok(!s.net.peaksOff && !s.winter, d);
+  }
+  // revenir à la date neutre redonne la demande du jour type
+  n.sim.setScenario({ date: '2026-07-22' }); assert.notStrictEqual(n.sim.hourRate, n.sim.baseRate);
+  n.sim.setScenario({ date: null }); assert.strictEqual(n.sim.hourRate, n.sim.baseRate);
+});
+
+test('calendrier : volumes de la journée (25 décembre plus bas, juillet plus haut, construction en pointe du matin)', () => {
+  const oct = ratesOf('2026-10-14').rate, base = sumH(oct, 0, 24);
+  const noel = ratesOf('2026-12-25').rate, dec = ratesOf('2026-12-16').rate, jul = ratesOf('2026-07-08').rate, ccq = ratesOf('2026-07-22').rate;
+  assert.ok(sumH(noel, 0, 24) < sumH(dec, 0, 24) && sumH(noel, 0, 24) < base);
+  assert.ok(Math.abs(sumH(noel, 0, 24) / base - 0.56) < 1e-9);
+  assert.ok(sumH(jul, 0, 24) > base, 'juillet hors construction : total du jour au-dessus d\'octobre');
+  assert.ok(Math.abs(sumH(ccq, 6, 9) / sumH(oct, 6, 9) - 0.73) < 1e-9);
+});
+
+test('calendrier : pointe du matin simulée, un samedi sous 40 % et la construction à 0,73 d\'un jour d\'octobre', () => {
+  const am = (date) => run({ line: 'none', cab: 'off', date }, 3, 6 * 3600).summary().trips; // 6 h à 9 h
+  const oct = am('2026-10-14'), sat = am('2026-10-17'), ccq = am('2026-07-22');
+  // samedi : le modèle donne 0,345 (profil de l'A-40 appliqué à la demande de l'enquête O-D), sous les 0,41 mesurés
+  // sur l'A-40 en 2024 : écart déclaré dans les limites du README. Le seuil serré protège la valeur du modèle.
+  assert.ok(sat < 0.4 * oct, 'samedi ' + sat + ' contre ' + oct);
+  assert.ok(Math.abs(sat / oct - 0.345) < 0.02, 'samedi ' + sat / oct);
+  assert.ok(Math.abs(ccq / oct - 0.73) <= 0.02, 'construction ' + ccq / oct);
+});
+
+test('calendrier : voies réservées de pointe et grille horaire de fin de semaine', () => {
+  const [e0, cap0, a0] = data.peaks[0];
+  const peakEdges = [...new Set(data.peaks.map((p) => p[0]))];
+  const t = (a0 + 10) * 60; // en pleine plage de pointe
+  const mk = (date) => new TQ.Simulation(data, { scenario: { line: 'tram', cab: 'off', date }, start: t });
+  const wd = mk('2026-10-14'), sat = mk('2026-10-17'), hol = mk('2026-10-12'); // Action de grâce : un lundi
+  assert.strictEqual(wd.net.ecap0[e0], cap0); assert.ok(!wd.net.peaksOff);
+  for (const s of [sat, hol]) {
+    assert.ok(s.net.peaksOff); assert.strictEqual(s.net.peakNext, Infinity);
+    for (const e of peakEdges) assert.strictEqual(s.net.ecap0[e], data.edges.cap[e]);
+    s.step(3600);
+    for (const e of peakEdges) assert.strictEqual(s.net.ecap0[e], data.edges.cap[e]);
+  }
+  // grille : pointe aux 4 minutes en semaine ; la fin de semaine, intervalle de jour (8 min) de 6 h à 20 h, puis de soir
+  const h = (s, hr) => s.line.headway(hr * 3600) / 60;
+  assert.strictEqual(h(wd, 7.5), 4); assert.strictEqual(h(wd, 16), 4);
+  for (const hr of [6.2, 7.5, 12, 16, 19.5]) assert.strictEqual(h(sat, hr), 8, 'samedi ' + hr);
+  for (const hr of [5.5, 21, 0.5]) assert.strictEqual(h(sat, hr), 12, 'samedi ' + hr);
+  assert.strictEqual(h(sat, 3), 0); assert.ok(!sat.line.isOpen(3 * 3600));
+  assert.strictEqual(hol.line.service, 'fin-de-semaine'); assert.strictEqual(wd.line.service, 'semaine');
+  // sans grille donnée, servicePeriod est inchangé
+  for (let m = 0; m < 1440; m += 15) assert.strictEqual(TQ.servicePeriod(m * 60), TQ.servicePeriod(m * 60, 'semaine'));
+  // 28 au 30 décembre : jour ouvrable (voies en vigueur), mais service du RTC au niveau du samedi
+  const d = TQ.dayInfo('2026-12-29'); assert.ok(d.peakLanes); assert.strictEqual(d.service, 'fin-de-semaine');
+  assert.strictEqual(TQ.dayInfo('2026-12-22').service, 'semaine');
+  // journées enchaînées : du dimanche 18 au lundi 19 octobre 2026, les voies et la grille de semaine reviennent,
+  // comme dans une simulation partie directement le lundi
+  const ch = new TQ.Simulation(data, { scenario: { line: 'tram', cab: 'off', date: '2026-10-18' }, start: TQ.PARAMS.dayStart + 86400 - 1800 });
+  assert.ok(ch.net.peaksOff); assert.strictEqual(ch.line.service, 'fin-de-semaine');
+  ch.step(3600);
+  assert.strictEqual(ch.date, '2026-10-19'); assert.ok(!ch.net.peaksOff); assert.strictEqual(ch.line.service, 'semaine');
+  ch.step(Math.floor(ch.t / 86400) * 86400 + (a0 + 10) * 60 - ch.t); // en pleine plage de pointe du lundi
+  const fresh = mk('2026-10-19');
+  assert.strictEqual(ch.net.ecap0[e0], cap0); assert.strictEqual(ch.net.ecap0[e0], fresh.net.ecap0[e0]);
+  assert.strictEqual(h(ch, (ch.t % 86400) / 3600), h(fresh, (fresh.t % 86400) / 3600));
+});
+
+test('calendrier : l\'hiver vient de la date, la case « Journée d\'hiver » reste prioritaire', () => {
+  const jan = new TQ.Simulation(data, { scenario: { line: 'tram', cab: 'off', date: '2027-01-20' } });
+  assert.ok(jan.winter && !jan.scenario.winter && jan.line.winter && jan.net.cond.winter);
+  assert.strictEqual(jan.summary().scenario.winter, true); assert.ok(/hiver/.test(jan.summary().label));
+  const jul = new TQ.Simulation(data, { scenario: { line: 'none', cab: 'off', date: '2026-07-22' } });
+  assert.ok(!jul.winter && !jul.net.cond.winter && jul.summary().scenario.winter === false);
+  jul.setScenario({ winter: true }); assert.ok(jul.winter && jul.net.cond.winter);
+  // sans date, seule la case compte
+  const n = new TQ.Simulation(data, { scenario: { line: 'none', cab: 'off' } });
+  assert.strictEqual(n.winter, false); assert.ok(!('date' in n.summary().scenario));
+});

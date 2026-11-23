@@ -58,6 +58,12 @@ input[type=range] { width: 100%; accent-color: var(--cab); margin: 6px 0 0; }
 .starts { display: flex; gap: 6px; align-items: center; margin-top: 10px; font-size: 14px; color: var(--mist); }
 .starts button { background: var(--slate-2); border: 1px solid var(--line); border-radius: 4px; padding: 4px 9px; color: var(--snow); }
 .starts button:hover { border-color: var(--snow); }
+.start-at { margin-top: 10px; font-size: 14px; }
+.start-at label { display: block; color: var(--mist); margin-bottom: 4px; }
+.start-at select, .start-at input { width: 100%; background: var(--slate-2); border: 1px solid var(--line); border-radius: 4px; padding: 5px 8px; color: var(--snow); font: inherit; color-scheme: dark; }
+.start-at input { margin-top: 6px; }
+.start-at select:hover, .start-at input:hover { border-color: var(--snow); }
+.warn { color: var(--warn); font-size: 14px; margin: 0 0 10px; }
 
 .legend { margin-top: 10px; display: grid; gap: 4px; font-size: 13px; color: var(--mist); }
 .legend li { display: flex; align-items: center; gap: 8px; }
@@ -217,3 +223,4 @@ input[type=range] { height: 24px; }
   dialog { padding: 18px 14px; width: 96vw; }
 }
 @media (prefers-reduced-motion: reduce) { .split span, .gauge-bar span { transition: none; } }
+#line-run:empty, #cab-run:empty { display: none; }

@@ -114,6 +114,12 @@
     setTime(t) {
       const B = this.peakBounds;
       if (!B.length) return;
+      // fin de semaine et fériés (peaksOff, posé par Simulation.reset) : aucune voie réservée de pointe, capacités permanentes
+      if (this.peaksOff) {
+        this.peakNext = Infinity;
+        for (const e of this.peakEdges) { this.ecap0[e] = this.ecapPerm[e]; this.applyEdge(e); }
+        return;
+      }
       const day = Math.floor(t / 86400), m = (t - day * 86400) / 60;
       let i = 0;
       while (i < B.length && B[i] <= m) i++;
