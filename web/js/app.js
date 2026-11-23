@@ -10,6 +10,9 @@
     return a >= 1e9 ? [sg + fmt1.format(a / 1e9), 'G$'] : a >= 1e6 ? [sg + fmt1.format(a / 1e6), 'M$'] : a >= 1e3 ? [sg + fmt.format(a / 1e3), 'k$'] : [sg + fmt.format(a), '$'];
   };
   const moneyText = (v) => money(v).join(' ');
+  const signedMoney = (v) => (v > 0.5 ? '+' : '') + moneyText(v);
+  const replacedTripsCO2 = 'CO₂ évité par les trajets auto remplacés';
+  const scenarioKey = (c) => [c.line, c.cab, c.fleet, c.farePerKm, !!c.winter, !!c.pool, c.carFree || 0, !!c.auto, !!c.farePerOccupant].join('|');
   const COLORS = { tram: [255, 200, 61], bus: [82, 182, 255], cab: [255, 92, 147], car: [205, 216, 230] };
   const MODE_META = [
     ['auto', 'Automobile', '#cdd8e6'], ['rtc', 'Autobus actuels', '#6f86a3'], ['actif', 'Marche et vélo', '#3ecf8e'],
@@ -41,7 +44,10 @@
   // curseur de coût -> [chemin dans TQ.ECON, multiplicateur, décimales, unité]
   const COSTS = { tram: ['line.tram.capex', 1e9, 1, 'G$'], bus: ['line.bus.capex', 1e9, 1, 'G$'], veh: ['cab.vehicle', 1e3, 0, 'k$'], km: ['cab.opexKm', 1, 2, '$'], taux: ['discount', 0.01, 1, '%'] };
   const dig = (root, path) => path.split('.').reduce((o, k) => o[k], root);
-  const econSet = (path, v) => { const ks = path.split('.'), last = ks.pop(); (ks.length ? dig(TQ.ECON, ks.join('.')) : TQ.ECON)[last] = v; };
+  const econSet = (path, v) => { const ks = path.split('.'), last = ks.pop(); (ks.length ? dig(TQ.ECON, ks.join('.')) : TQ.ECON)[last] = v;
+    // la voie réservée aux Cybercab occupe la même emprise que les voies réservées aux bus : son coût suit le même curseur
+    if (path === 'line.bus.capex') TQ.ECON.line.cablane.capex = v;
+  };
   const costValue = (id) => +(dig(TQ.ECON, COSTS[id][0]) / COSTS[id][1]).toFixed(2);
 
   /** Scénario et coûts lus dans l'adresse (#ligne=tram&cab=wide&flotte=3000...). Toute valeur hors bornes est ignorée. */
@@ -151,12 +157,21 @@
       net.edgePosLane(e, 0, 0, o3, 0); state.corS0[e] = project(o3[0], o3[1]).s;
       net.edgePosLane(e, net.elen[e], 0, o3, 0); state.corS1[e] = project(o3[0], o3[1]).s;
     }
+    // Voie réservée aux Cybercab : elle n'existe que sur les rues qui longent le tracé (les arêtes ci-dessus), pas
+    // dans le tunnel ni là où le tracé quitte les rues. Portions du tracé où elle existe (on) et le reste (off) :
+    // seules les premières sont allumées. Les lacunes de moins de 40 m (carrefours) ne sont pas dessinées.
+    const spans = [];
+    for (let e = 0; e < net.E; e++) if (net.ecor[e]) spans.push([state.corS0[e], state.corS1[e]]);
+    state.lane = TQ.lineCover(LC, LS, spans, 40);
+    for (const part of state.lane.on) part.on = true;
+    state.laneAll = state.lane.off.concat(state.lane.on);
     state.ebox = new Float32Array(net.E * 4); state.byEdge = new Map();
     for (let e = 0; e < net.E; e++) {
       let x0 = 180, x1 = -180, y0 = 90, y1 = -90;
       for (const c of d.segs[net.eseg[e]]) { if (c[0] < x0) x0 = c[0]; if (c[0] > x1) x1 = c[0]; if (c[1] < y0) y0 = c[1]; if (c[1] > y1) y1 = c[1]; }
       state.ebox.set([x0, y0, x1, y1], e * 4);
     }
+    state.ahead = { e: 0, p: 0, tt: 1, hops: 0 };
     state.posBuf = new Float32Array(2 * 40000); state.colBuf = new Uint8Array(4 * 40000);
     state.cabPos = new Float32Array(2 * 12000); state.cabCol = new Uint8Array(4 * 12000);
     // noms affichés sur la carte : terminus et pôles d'échanges
@@ -167,7 +182,7 @@
     // marquages posés quelques centimètres au-dessus de l'asphalte, pour une superposition nette
     for (const r of roadData) { r.path3 = r.path.map((c) => [c[0], c[1], 0.06]); const c = net.ecls[r.edges[0]]; r.fast = c === 0 || c === 1 || c === 5; }
     state.streets = roadData.filter((r) => !r.fast);
-    for (const part of lineParts) { part.path3 = part.path.map((c) => [c[0], c[1], 0.12]); part.path4 = part.path.map((c) => [c[0], c[1], 0.17]); }
+    for (const part of lineParts.concat(state.lane.on)) { part.path3 = part.path.map((c) => [c[0], c[1], 0.12]); part.path4 = part.path.map((c) => [c[0], c[1], 0.17]); }
   }
 
   function initMap() {
@@ -746,7 +761,7 @@
     // Le long du tracé, la rue perd une voie et le bloc s'écarte de l'emprise réservée pour ne jamais la chevaucher.
     const block = (ed) => {
       const two = net.etwo[ed] === 1, onLine = reserved && net.ecor[ed] === 1;
-      const k = Math.max(1, net.elanes[ed] - (onLine ? 1 : 0)), W = k * LANE;
+      const k = Math.max(1, net.elanes[ed] - (onLine && !net.ebus[ed] ? 1 : 0)), W = k * LANE;
       let x0 = two ? AXIS : -W / 2;
       if (onLine) {
         const a = state.corLat[ed] - STRIP, b = state.corLat[ed] + STRIP;
@@ -789,7 +804,8 @@
     if (reserved) {
       // l'emprise réservée : plateforme du tramway avec ses rails, ou chaussée teintée des bus et des Cybercab
       const kind = L ? L.kind : 'cablane';
-      if (state.stripKey !== kind) { state.stripKey = kind; state.strip = lineParts.filter((d) => !tun(d)); }
+      // (la voie des Cybercab n'est peinte que là où elle existe : sur les rues du tracé, où roulent les convois)
+      if (state.stripKey !== kind) { state.stripKey = kind; state.strip = kind === 'cablane' ? state.lane.on : lineParts.filter((d) => !tun(d)); }
       const strip = state.strip;
       const surface = kind === 'tram' ? [164, 160, 150, 255] : kind === 'bus' ? [150, 92, 84, 255] : [136, 114, 66, 255];
       layers.push(flat('line3d', strip, { getPath: (d) => d.path3, getColor: surface, getWidth: 2 * STRIP - 0.5 * big, widthMinPixels: 2, capRounded: true, jointRounded: true }));
@@ -807,10 +823,28 @@
     const bb = map.getBounds(), w = bb.getWest(), e = bb.getEast(), s = bb.getSouth(), n = bb.getNorth();
     const carLen = 4.5 * big, gap = carLen + 2.4 * big, box = state.ebox, byEdge = state.byEdge, padX = (24 * gap) / TQ.geo.KX, padY = (24 * gap) / TQ.geo.KY;
     byEdge.clear();
+    // Le moteur avance par pas de 2 s : entre deux pas, chaque véhicule est dessiné là où il sera quand le temps
+    // déjà écoulé (rest) aura été simulé. dE, dP, dTT, dH : tronçon, avancement, temps de parcours et nombre de
+    // tronçons franchis pour le dessin ; l'état du moteur n'est pas touché.
+    const rest = sim.stepRest, ah = state.ahead;
+    if (!state.dE || state.dE.length < net.vn) { const cap = net.vcap; state.dE = new Int32Array(cap); state.dP = new Float32Array(cap); state.dTT = new Float32Array(cap); state.dH = new Uint8Array(cap); }
+    const dE = state.dE, dP = state.dP, dTT = state.dTT, dH = state.dH;
+    // tronçon déjà parcouru, d rangs avant celui du dessin (0 : le précédent), ou -1
+    const REAL = [net.vEdge, net.vPrev, net.vPrev2, net.vPrev3, net.vPrev4];
+    const before = (i, d) => {
+      const h = dH[i];
+      if (d + 1 - h >= 0) return d + 1 - h < 5 ? REAL[d + 1 - h][i] : -1;
+      // plusieurs tronçons très courts franchis depuis le dernier pas : on les retrouve en suivant le trajet
+      const tn = (net.vType[i] > 0 && net.cabLane ? net.tnextC : net.tnext)[net.vDest[i]];
+      let ed = net.vEdge[i];
+      for (let q = h - 1 - d; q > 0; q--) ed = tn[net.eb[ed]];
+      return ed;
+    };
     for (let i = 0; i < net.vn; i++) {
       const type = net.vType[i];
       if (type === 0 && !state.layers.cars) continue;
-      const ed = net.vEdge[i], q = ed * 4;
+      net.aheadOf(i, rest, ah); dE[i] = ah.e; dP[i] = ah.p; dTT[i] = ah.tt; dH[i] = ah.hops;
+      const ed = ah.e, q = ed * 4;
       // marge : les suiveurs d'un groupe roulent encore à l'écran quand sa tête vient d'en sortir
       if (box[q + 2] < w - padX || box[q] > e + padX || box[q + 3] < s - padY || box[q + 1] > n + padY) continue;
       let list = byEdge.get(ed);
@@ -845,7 +879,7 @@
     // Mémoire d'affichage : chaque auto garde d'une image à l'autre sa dernière position, pour ne jamais sauter ni
     // s'effacer en pleine rue. Elle est vidée quand la journée repart ou saute dans le temps.
     const mem = state.carMem || (state.carMem = new Map()), frame = (state.frame3 = (state.frame3 || 0) + 1);
-    const dT = state.t3 == null ? 0 : sim.t - state.t3; state.t3 = sim.t;
+    const tDraw = sim.t + rest, dT = state.t3 == null ? 0 : tDraw - state.t3; state.t3 = tDraw;
     if (dT < 0 || dT > 30 || state.resets3 !== sim.resets) mem.clear();
     state.resets3 = sim.resets;
     const simDt = dT < 0 || dT > 30 ? 0 : dT, smooth = simDt < 2, jumpMin = 2.5 + 45 * simDt;
@@ -855,7 +889,6 @@
       if (type === 0) { if (cars.length < 14000) cars.push(v); } else if (cabs.length < 9000) cabs.push(v);
     };
     // rt : tronçons qu'il lui reste à parcourir quand son groupe est sur le point d'arriver (null sinon) ; spd : m par seconde simulée
-    const HIST = [net.vPrev, net.vPrev2, net.vPrev3, net.vPrev4];
     const emit = (key, type, paint, sc, ed, at, k, prev, next, rt, spd) => {
       place(ed, at, k, prev, next);
       let x = out[0], y = out[1], m = mem.get(key);
@@ -875,7 +908,7 @@
       const [x0, carLanes, W] = block(ed);
       // voie réservée aux Cybercab : le convoi laisse le carrefour dégagé
       const clear = Math.min(len * 0.25, Math.max(Math.abs(x0), Math.abs(x0 + W)) + carLen * 0.5);
-      list.sort((p, q) => net.vProg[q] - net.vProg[p]);
+      list.sort((p, q) => dP[q] - dP[p]);
       let lastCab = Infinity;
       const queue = [];
       for (const i of list) {
@@ -884,11 +917,11 @@
         // un agent du moteur représente plusieurs véhicules réels : ils se suivent, à quelques longueurs d'écart.
         // Chaque véhicule garde son numéro, donc sa couleur, sa voie et son écart, du départ à l'arrivée.
         const key = id * 8 + c, hs = (key * 2654435761) >>> 0, h = hs / 4294967296;
-        const want = net.vProg[i] * len - c * gap * (1.5 + 1.5 * h);
+        const want = dP[i] * len - c * gap * (1.5 + 1.5 * h);
         if (type > 0 && net.cabLane && onLine) {
           // voie réservée : les Cybercab se suivent en convoi serré
           // d'un tronçon du tracé au suivant, le convoi se prolonge sans coupure le long de la ligne
-          const pv = net.vPrev[i], fromLine = pv >= 0 && net.ecor[pv] === 1;
+          const pv = before(i, 0), fromLine = pv >= 0 && net.ecor[pv] === 1;
           const at = Math.min(want, lastCab - (carLen + 0.9 * big));
           if (at < (fromLine ? -80 * big : clear) || cabs.length >= 9000) break;
           lastCab = at;
@@ -906,10 +939,10 @@
       queue.sort((p, q) => q.want - p.want);
       const last = new Array(carLanes).fill(Infinity);
       for (const q of queue) {
-        const i = q.i, type = net.vType[i], prev = net.vPrev[i], dest = net.vDest[i], k = (q.hs >>> 7) % carLanes;
+        const i = q.i, type = net.vType[i], prev = before(i, 0), dest = net.vDest[i], k = (q.hs >>> 7) % carLanes;
         // tronçon suivant de son trajet (-1 : il arrive à destination au bout de celui-ci)
         const next = endNode === net.dnode[dest] ? -1 : (type > 0 && net.cabLane ? net.tnextC : net.tnext)[dest][endNode];
-        const last1 = next < 0, spd = len / net.vTT[i], paint = (q.hs >>> 11) & 7;
+        const last1 = next < 0, spd = len / dTT[i], paint = (q.hs >>> 11) & 7;
         const at = Math.min(q.want, last[k] - gap);
         last[k] = at;
         if (at >= 0) {
@@ -922,13 +955,13 @@
         // (au départ, il n'est pas encore sorti de son stationnement)
         let back = at, nxt = ed;
         for (let d = 0; d < 4; d++) {
-          const pe = HIST[d][i];
+          const pe = before(i, d);
           if (pe < 0) break;
           back += net.elen[pe];
           if (back >= 0) {
-            const older = d < 3 ? HIST[d + 1][i] : -1;
+            const older = d < 3 ? before(i, d + 1) : -1;
             let rt = null;
-            if (last1) { rt = [ed]; for (let b = 0; b < d; b++) rt.unshift(HIST[b][i]); }
+            if (last1) { rt = [ed]; for (let b = 0; b < d; b++) rt.unshift(before(i, b)); }
             emit(q.key, type, paint, older < 0 && back < FADE ? Math.max(0.08, back / FADE) : 1, pe, back, k, older, nxt, rt, spd);
             break;
           }
@@ -961,9 +994,11 @@
       // rames et autobus articulés : des caisses qui suivent chacune la courbe, à droite de l'axe selon le sens
       const parts = L.kind === 'tram' ? 5 : 2, partLen = (L.p.length * big) / parts, veh = [], a = [0, 0], b = [0, 0], c = [0, 0];
       for (const v of L.vehicles) {
-        if (!v.active || (L.kind === 'tram' && v.s > L.tunnel[0] - L.p.length && v.s < L.tunnel[1] + L.p.length)) continue;
+        if (!v.active) continue;
+        const vs = L.drawS(v, sim.t, rest);
+        if (L.kind === 'tram' && vs > L.tunnel[0] - L.p.length && vs < L.tunnel[1] + L.p.length) continue;
         for (let q = 0; q < parts; q++) {
-          const sc = v.s + (q - (parts - 1) / 2) * partLen;
+          const sc = vs + (q - (parts - 1) / 2) * partLen;
           L.posAt(sc - partLen / 2, a, 0); L.posAt(sc, b, 0); L.posAt(sc + partLen / 2, c, 0);
           let dx = (c[0] - a[0]) * TQ.geo.KX, dy = (c[1] - a[1]) * TQ.geo.KY;
           if (v.dir === 1) { dx = -dx; dy = -dy; }
@@ -1015,27 +1050,33 @@
       layers.push(new deck.PathLayer({ id: 'cab-zone-wide', data: window.TQ_DATA.outlines.filter((o) => o.zone <= 5), getPath: (d) => d.ring, getColor: [255, 92, 147, 120], getWidth: 1.5, widthUnits: 'pixels' }));
     }
     // le tracé : un halo, un liseré sombre qui le détache des rues, puis le trait
-    if (lit) layers.push(new deck.PathLayer({ id: 'line-glow', data: lineParts.filter((d) => !tun(d)), getPath: (d) => d.path, getColor: [...lineColor, 34], getWidth: 16, widthUnits: 'pixels', capRounded: true, jointRounded: true, updateTriggers: { getColor: [lineKey] } }));
+    // Voie réservée aux Cybercab : seules les portions où la voie existe (rues du tracé) sont allumées ; le reste
+    // du tracé (tunnel, portions hors des rues) reste visible mais éteint, comme quand il n'y a aucune ligne.
+    if (lit) layers.push(new deck.PathLayer({ id: 'line-glow', data: lane ? state.lane.on : lineParts.filter((d) => !tun(d)), getPath: (d) => d.path, getColor: [...lineColor, 34], getWidth: 16, widthUnits: 'pixels', capRounded: true, jointRounded: true, updateTriggers: { getColor: [lineKey] } }));
     layers.push(new deck.PathLayer({ id: 'line-casing', data: lineParts.filter((d) => !tun(d)), getPath: (d) => d.path, getColor: [12, 21, 34, 235], getWidth: 8, widthUnits: 'pixels', capRounded: true, jointRounded: true }));
     layers.push(new deck.PathLayer({
-      id: 'line', data: lineParts, getPath: (d) => d.path, getColor: (d) => [...lineColor, lit ? (tun(d) ? 90 : 230) : 110],
-      getWidth: (d) => (tun(d) ? 3 : 4), widthUnits: 'pixels', capRounded: true, jointRounded: true, updateTriggers: { getColor: [lineKey], getWidth: [lineKey] },
+      id: 'line', data: lane ? state.laneAll : lineParts, getPath: (d) => d.path,
+      getColor: (d) => (lane ? (d.on ? [...lineColor, 230] : [130, 146, 166, 110]) : [...lineColor, lit ? (tun(d) ? 90 : 230) : 110]),
+      getWidth: (d) => (lane ? (d.on ? 4 : 3) : tun(d) ? 3 : 4), widthUnits: 'pixels', capRounded: true, jointRounded: true, updateTriggers: { getColor: [lineKey], getWidth: [lineKey] },
     }));
     // véhicules routiers
     // autos : petits points pâles ; Cybercab : points plus gros, dessinés par-dessus pour rester lisibles
     const n = net.vn, pos = state.posBuf, col = state.colBuf, cpos = state.cabPos, ccol = state.cabCol;
+    // le moteur avance par pas de 2 s : entre deux pas, chaque véhicule est dessiné là où il sera
+    // quand le temps déjà écoulé (rest) aura été simulé. L'état du moteur n'est pas touché.
+    const rest = sim.stepRest, ah = state.ahead;
     let k = 0, c = 0;
     for (let i = 0; i < n; i++) {
       const type = net.vType[i];
       if (type === 0) {
         if (!state.layers.cars || k >= 40000) continue;
-        net.edgePos(net.vEdge[i], net.vProg[i], pos, k * 2);
+        net.aheadOf(i, rest, ah); net.edgePos(ah.e, ah.p, pos, k * 2);
         const o = k * 4;
         if (net.cond.auto) { col[o] = 96; col[o + 1] = 226; col[o + 2] = 212; col[o + 3] = 150; } // autos connectées : turquoise
         else { col[o] = 205; col[o + 1] = 216; col[o + 2] = 230; col[o + 3] = 125; }
         k++;
       } else if (c < 12000) {
-        net.edgePos(net.vEdge[i], net.vProg[i], cpos, c * 2);
+        net.aheadOf(i, rest, ah); net.edgePos(ah.e, ah.p, cpos, c * 2);
         const o = c * 4; ccol[o] = 255; ccol[o + 1] = type === 2 ? 92 : 168; ccol[o + 2] = type === 2 ? 147 : 198; ccol[o + 3] = type === 2 ? 255 : 170;
         c++;
       }
@@ -1076,8 +1117,9 @@
       for (const v of L.vehicles) {
         if (!v.active) continue;
         const a = [0, 0], b = [0, 0], c = [0, 0];
-        L.posAt(v.s - half, a, 0); L.posAt(v.s, b, 0); L.posAt(v.s + half, c, 0);
-        veh.push({ v, path: [a, b, c], tunnel: L.kind === 'tram' && v.s > L.tunnel[0] && v.s < L.tunnel[1] });
+        const vs = L.drawS(v, sim.t, rest);
+        L.posAt(vs - half, a, 0); L.posAt(vs, b, 0); L.posAt(vs + half, c, 0);
+        veh.push({ v, path: [a, b, c], tunnel: L.kind === 'tram' && vs > L.tunnel[0] && vs < L.tunnel[1] });
       }
       layers.push(new deck.PathLayer({
         id: 'line-veh', data: veh, getPath: (d) => d.path, getColor: (d) => [255, 255, 255, d.tunnel ? 130 : 255], getWidth: 9, widthUnits: 'meters', widthMinPixels: L.kind === 'tram' ? 7 : 5, capRounded: true, pickable: true, parameters: { depthTest: false },
@@ -1095,6 +1137,7 @@
     const dtReal = Math.min(0.1, (now - last) / 1000); last = now;
     if (state.playing && !document.hidden && !state.batch) {
       if (state.speed === 0) { const t0 = performance.now(); while (performance.now() - t0 < 22) sim.step(10); }
+      // le temps écoulé est passé tel quel : le moteur le découpe lui-même en pas de 2 s et garde le reste
       else sim.step(dtReal * state.speed);
     }
     colorAcc += dtReal; uiAcc += dtReal;
@@ -1114,7 +1157,7 @@
 
   function updateUi() {
     const s = sim.summary(), L = sim.line, F = sim.fleet;
-    setText('clock', TQ.formatClock(sim.t));
+    setText('clock', TQ.formatClock(sim.t + sim.stepRest));
     setText('day-label', `Jour ${sim.day}, ${sim.scenarioLabel()}`);
     setText('split-title', `Déplacements depuis ${TQ.formatClock(Math.round(sim.tDayStart / 600) * 600).replace(' h 00', ' h')}`);
     const total = Math.max(1, s.trips);
@@ -1156,6 +1199,9 @@
       kpi('k-cspeed', s.cab.speed ? fmt.format(s.cab.speed) : '–', 'km/h');
       kpi('k-pooled', fmt.format(s.cab.rides > 0 ? Math.min(100, (s.cab.pooled / s.cab.rides) * 100) : 0), '%');
       $('row-pooled').hidden = !sim.scenario.pool;
+      // la voie réservée ne couvre que les rues du tracé : part des kilomètres de la flotte qui s'y font
+      kpi('k-lane', fmt.format(s.cab.laneShare * 100), '%');
+      $('row-lane').hidden = !sim.cabLane;
     }
     $('sec-econ').hidden = !L && !F;
     if (L || F) {
@@ -1170,7 +1216,8 @@
       setText('k-capex', `Investissement à amortir : ${e.parts.map((p) => `${moneyText(p.capex)} (${p.kind === 'tram' ? 'tramway' : p.kind === 'bus' ? 'voies réservées et bus' : p.kind === 'cablane' ? 'voie réservée' : 'Cybercab et recharge'})`).join(' + ')}.`);
     }
     setText('k-co2', fmt1.format(Math.abs(s.co2Avoided)));
-    setText('k-co2-label', s.co2Avoided >= 0 ? 'tonnes de CO₂ évitées depuis le départ' : 'tonnes de CO₂ ajoutées depuis le départ');
+    setText('k-co2-title', s.scenario.auto ? replacedTripsCO2 + ' et l’électrification du parc' : replacedTripsCO2);
+    setText('k-co2-label', s.co2Avoided >= 0 ? 'tonnes évitées depuis le départ' : 'tonnes ajoutées depuis le départ');
     drawChart(lineHex);
     if ($('dlg-compare').open && state.histLen !== sim.history.length) renderCompare();
   }
@@ -1211,22 +1258,93 @@
   }
 
   function econRow(s) {
-    if (!s.line && !s.cab && !(s.scenario && s.scenario.auto)) return `<tr><td>${esc(s.label)}</td>${'<td>–</td>'.repeat(10)}</tr>`;
+    if (!s.line && !s.cab && !(s.scenario && s.scenario.auto)) return `<tr><td>${esc(s.label)}</td>${'<td>–</td>'.repeat(11)}</tr>`;
     const e = TQ.economics(s), a = e.annual, y = a.society;
     const signed = (v, strong) => (v == null ? '<td>–</td>' : `<td style="color:var(--${v < 0 ? 'bad' : 'ok'})${strong ? ';font-weight:600' : ''}">${moneyText(v)}</td>`);
-    return `<tr><td>${esc(s.label)}</td><td>${moneyText(e.capex)}</td><td>${moneyText(a.revenue)}</td><td>${moneyText(a.opex)}</td><td>${moneyText(a.capital)}</td>${signed(a.net, true)}${signed(y.riders)}${signed(y.drivers)}${signed(y.co2)}${signed(y.rtcLoss)}${signed(y.net, true)}</tr>`;
+    return `<tr><td>${esc(s.label)}</td><td>${moneyText(e.capex)}</td><td>${moneyText(a.revenue)}</td><td>${moneyText(a.opex)}</td><td>${moneyText(a.capital)}</td>${signed(a.net, true)}${signed(y.riders)}${signed(y.carFree)}${signed(y.drivers)}${signed(y.co2)}${signed(y.rtcLoss)}${signed(y.net, true)}</tr>`;
+  }
+
+  // Cache raw daily results so both sides always use the current cost sliders.
+  const comparisonDays = new Map();
+  const failedDays = new Set();
+  let comparisonRunning = false;
+  let showFareComparison = false;
+
+  function comparisonDay(scenario) {
+    const key = scenarioKey(scenario);
+    if (comparisonDays.has(key)) return comparisonDays.get(key);
+    if (comparisonRunning || failedDays.has(key) || state.batch || !$('dlg-compare').open) return;
+    let worker;
+    function finish(summary) {
+      if (summary) comparisonDays.set(key, summary);
+      else failedDays.add(key);
+      if (worker) worker.terminate();
+      comparisonRunning = false;
+      if ($('dlg-compare').open) renderCompare();
+    }
+    try {
+      worker = new Worker('js/comparison-day.worker.js');
+      comparisonRunning = true;
+      worker.onmessage = ({ data }) => finish(data);
+      worker.onerror = worker.onmessageerror = () => finish(null);
+      worker.postMessage({ scenario, seed: sim.seed });
+    } catch {
+      if (worker) worker.terminate();
+      comparisonRunning = false;
+      failedDays.add(key);
+    }
+  }
+
+  function carFreeComparison() {
+    const affected = sim.history.filter(s => s.cab && s.scenario.carFree > 0);
+    if (!affected.length) return '';
+    const rows = affected.map(s => {
+      const scenario = { ...s.scenario, carFree: 0 };
+      const baseline = comparisonDay(scenario);
+      const current = TQ.economics(s).annual.society.net;
+      if (baseline) {
+        const zero = TQ.economics(baseline).annual.society.net;
+        return `<tr><th scope="row">${esc(s.label)}</th><td>${signedMoney(zero)}</td><td>${signedMoney(current)}</td><td><strong>${signedMoney(current - zero)}</strong></td></tr>`;
+      }
+      const status = failedDays.has(scenarioKey(scenario)) ? 'Calcul indisponible. Rouvrez la comparaison pour réessayer.' : 'Calcul de la journée à 0 %…';
+      return `<tr><th scope="row">${esc(s.label)}</th><td>${status}</td><td>${signedMoney(current)}</td><td>–</td></tr>`;
+    }).join('');
+    return `<h3>Effet des déplacements faits sans auto</h3>
+      <p class="hint">Bilan annuel pour la société avec la même flotte, les mêmes réglages et la même demande. L’écart mesure l’effet de passer de 0 % à la part choisie.</p>
+      <div class="table-wrap"><table><thead><tr><th>Scénario</th><th>À 0 %</th><th>À la part choisie</th><th>Écart annuel</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  }
+
+  function fareComparison() {
+    if (!showFareComparison) return '';
+    const rows = sim.history.filter(s => s.cab).map(s => {
+      const scenario = { ...s.scenario, farePerOccupant: true };
+      const other = comparisonDay(scenario);
+      const status = failedDays.has(scenarioKey(scenario)) ? 'Calcul indisponible. Rouvrez la comparaison pour réessayer.' : 'Calcul en cours…';
+      const result = other
+        ? `<td>${fmt.format(other.cab.rides)}</td><td>${signedMoney(TQ.economics(other).annual.net)}</td>`
+        : `<td colspan="2">${status}</td>`;
+      return `<tr><th scope="row">${esc(s.label)}</th><td>${fmt.format(s.cab.rides)}</td><td>${signedMoney(TQ.economics(s).annual.net)}</td>${result}</tr>`;
+    }).join('');
+    if (!rows) return '';
+    return `<h3>Quel prix le voyageur utilise-t-il pour choisir le Cybercab ?</h3>
+      <p class="hint">La même journée est rejouée avec le prix de la course divisé par l’occupation moyenne (${fmt1.format(TQ.PARAMS.cab.occupancy)}). Le montant facturé par course reste identique. Le résultat annuel de l’exploitant inclut aussi la ligne ou la voie réservée lorsqu’elle est présente.</p>
+      <div class="table-wrap"><table><thead><tr><th rowspan="2">Scénario</th><th colspan="2" scope="colgroup">Course entière (par défaut)</th><th colspan="2" scope="colgroup">Prix par occupant</th></tr><tr><th>Passagers Cybercab/j</th><th>Exploitant/an</th><th>Passagers Cybercab/j</th><th>Exploitant/an</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   }
 
   function renderCompare() {
     state.histLen = sim.history.length;
     const el = $('compare');
+    $('compare-fares').hidden = showFareComparison || !sim.history.some(s => s.cab);
+    for (const s of sim.history) comparisonDays.set(scenarioKey(s.scenario), s);
     if (!sim.history.length) { el.innerHTML = '<p class="empty">Aucune journée terminée pour l\'instant. Utilisez un des boutons ci-dessus, ou laissez tourner la simulation jusqu\'à 5 h.</p>'; return; }
     const rows = sim.history.map((s) => `<tr><td>${esc(s.label)}</td><td>${fmt.format(s.line ? s.line.boardings : 0)}</td><td>${s.line ? fmt.format(s.line.peakLoad) : '–'}</td><td>${s.line ? fmt1.format(s.line.speed) : '–'}</td><td>${s.cab ? fmt.format(s.cab.rides) : '–'}</td><td>${s.cab ? fmt.format(s.cab.emptyShare * 100) + ' %' : '–'}</td><td>${fmt.format(s.carsRemoved)}</td><td>${fmt1.format(s.avgSpeed)}</td><td>+${fmt.format(s.congestion * 100)} %</td><td>${fmt1.format(s.co2Avoided)}</td></tr>`).join('');
-    el.innerHTML = `<div class="table-wrap"><table><thead><tr><th>Scénario</th><th>Montées sur la ligne</th><th>Charge max. par heure</th><th>Vitesse de la ligne (km/h)</th><th>Passagers Cybercab</th><th>Km à vide</th><th>Trajets auto évités</th><th>Vitesse auto (km/h)</th><th>Temps perdu</th><th>CO₂ évité (t)</th></tr></thead><tbody>${rows}</tbody></table></div>
+    const co2Heading = sim.history.some(s => s.scenario.auto) ? replacedTripsCO2 + ' et, si activée, l’électrification du parc' : replacedTripsCO2;
+    el.innerHTML = `${carFreeComparison()}${fareComparison()}<div class="table-wrap"><table><thead><tr><th>Scénario</th><th>Montées sur la ligne</th><th>Charge max. par heure</th><th>Vitesse de la ligne (km/h)</th><th>Passagers Cybercab</th><th>Km à vide</th><th>Trajets auto évités</th><th>Vitesse auto (km/h)</th><th>Temps perdu</th><th>${co2Heading} (t)</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <p class="hint">Les émissions du nouveau service sont déduites. Une valeur négative indique une hausse des émissions. Les changements d’itinéraire des autos restantes sont exclus.</p>
       <h3>Rentabilité, par année</h3>
       ${econChart()}
-      <div class="table-wrap"><table><thead><tr><th>Scénario</th><th>Investissement</th><th>Recettes</th><th>Exploitation</th><th>Investissement étalé</th><th>Résultat de l'exploitant</th><th>Gain des voyageurs</th><th>Temps des automobilistes</th><th>CO₂ évité</th><th>Recettes perdues par le RTC</th><th>Bilan pour la société</th></tr></thead><tbody>${sim.history.map(econRow).join('')}</tbody></table></div>
-      <p class="hint">Le bilan pour la société additionne le résultat de l'exploitant et les quatre colonnes qui le précèdent. Il change avec les curseurs « Hypothèses de coûts ».</p>`;
+      <div class="table-wrap"><table><thead><tr><th>Scénario</th><th>Investissement</th><th>Recettes</th><th>Exploitation</th><th>Investissement étalé</th><th>Résultat de l'exploitant</th><th>Gain des voyageurs</th><th>Déplacements faits sans auto</th><th>Temps des automobilistes</th><th>Valeur du ${co2Heading}</th><th>Recettes des autobus du RTC</th><th>Bilan pour la société</th></tr></thead><tbody>${sim.history.map(econRow).join('')}</tbody></table></div>
+      <p class="hint">Le bilan pour la société additionne le résultat de l'exploitant et les cinq colonnes qui le précèdent. « Déplacements faits sans auto » ne se remplit qu'avec l'option d'abandon de l'auto : c'est l'écart de coût généralisé (temps, attente, marche, tarif, stationnement, coût au kilomètre) entre l'auto et le mode de remplacement, sans les économies de possession de l'auto. « Recettes des autobus du RTC » est négatif quand des usagers quittent les autobus, positif quand des déplacements faits sans auto s'y reportent. Le résultat de l'exploitant et le bilan changent avec les curseurs « Hypothèses de coûts ».</p>`;
   }
 
   // ------------------------------------------------------------------ commandes
@@ -1253,17 +1371,20 @@
     const k = sim.scenario.line;
     $('line-hint').textContent = k === 'tram' ? 'Rames de 240 places aux 4 minutes en pointe, tunnel sous la colline Parlementaire.'
       : k === 'bus' ? 'Bus articulés de 105 places aux 2 min 30 en pointe, en surface sur tout le trajet.'
-      : k === 'cablane' ? 'La voie du tramway est réservée aux Cybercab : ils y roulent en convois coordonnés à 45 km/h, sans feux ni autos. Aucun autre véhicule n\'y circule.'
+      : k === 'cablane' ? 'Une voie par sens est réservée aux Cybercab sur les rues que suit le tracé du tramway : environ 11 km par sens, sur un tracé de 19 km (trait allumé sur la carte). Ils y roulent en convois coordonnés à 45 km/h, sans feux ni autos. Pas de voie dans le tunnel ni là où le tracé quitte les rues (trait éteint) : la flotte y rejoint la circulation générale.'
       : 'Situation de référence : aucune ligne structurante, les voies restent aux autos.';
   }
 
   function bindUi() {
     // Tout changement repart 90 minutes plus tôt, calculées d'un coup, pour que les rues et la ligne soient déjà en charge.
+    // La reprise et l'heure visée sont calées sur la grille des pas du moteur (2 s, comptés depuis 5 h) :
+    // les pas tombent aux mêmes instants que dans une journée calculée d'un seul coup.
     const restart = (t, cfg) => {
       state.batch = null; // un changement de scénario interrompt un calcul de journées en cours
       Object.assign(sim.scenario, cfg || {});
-      const from = Math.max(t - 5400, sim.tDayEnd - 86400); // sans remonter avant le début de la journée
-      sim.reset(from); sim.step(t - from);
+      const S = TQ.Simulation.STEP, grid = (x) => TQ.PARAMS.dayStart + Math.round((x - TQ.PARAMS.dayStart) / S) * S;
+      const from = grid(Math.max(t - 5400, sim.tDayEnd - 86400)); // sans remonter avant le début de la journée
+      sim.reset(from); sim.step(grid(t) - from);
       writeHash();
     };
     // la voie réservée aux Cybercab va avec une flotte : choisir l'une règle l'autre
@@ -1320,19 +1441,19 @@
     };
     $('run-day').addEventListener('click', () => runBatch([{}]));
     // quatre scénarios types, pour remplir la comparaison d'un clic
+    // (le long du tracé, 500 Cybercab suffisent à la demande : au-delà, les véhicules en trop ne font que coûter)
     // aux réglages de départ (tarif, saison), pour que les quatre lignes se comparent entre elles
     const base = { farePerKm: TQ.PARAMS.cab.farePerKm, winter: false, pool: false, carFree: 0, auto: false };
     $('run-all').addEventListener('click', () => runBatch([
       { line: 'tram', cab: 'off' }, { line: 'bus', cab: 'off' },
-      { line: 'cablane', cab: 'corridor', fleet: 3000 }, { line: 'none', cab: 'wide', fleet: 1500 },
+      { line: 'cablane', cab: 'corridor', fleet: 500 }, { line: 'none', cab: 'wide', fleet: 1500 },
     ].map((c) => Object.assign({}, base, c))));
     // un lien collé dans l'onglet déjà ouvert remplace le scénario et les coûts
     window.addEventListener('hashchange', () => {
-      const key = (c) => ['line', 'cab', 'fleet', 'farePerKm', 'winter', 'pool', 'carFree', 'auto'].map((k) => !c[k] ? 0 : c[k]).join('|');
-      const before = key(sim.scenario), was3d = state.view3d;
+      const before = scenarioKey(sim.scenario), was3d = state.view3d;
       for (const id in COSTS) econSet(COSTS[id][0], dig(TQ.ECON_DEFAULTS, COSTS[id][0]));
       const sc = Object.assign({ fleet: 3000, farePerKm: TQ.PARAMS.cab.farePerKm, winter: false, pool: false, carFree: 0, auto: false }, readHash());
-      if (key(sc) !== before) { state.batch = null; sim.scenario = sc; sim.reset(TQ.PARAMS.dayStart); }
+      if (scenarioKey(sc) !== before) { state.batch = null; sim.scenario = sc; sim.reset(TQ.PARAMS.dayStart); }
       if (state.view3d !== was3d) setView3d(state.view3d);
       if (state.view3d) setPhoto(state.wantPhoto);
       syncControls(); lineHint();
@@ -1348,7 +1469,8 @@
     $('play').addEventListener('click', () => { state.playing = !state.playing; $('play').textContent = state.playing ? '❚❚' : '▶'; $('play').setAttribute('aria-label', state.playing ? 'Mettre en pause' : 'Reprendre'); });
     $('assumptions').innerHTML = TQ.ASSUMPTIONS.map((s) => `<h3>${s.title}</h3><ul>${s.items.map((i) => `<li>${i}</li>`).join('')}</ul>`).join('');
     $('open-assumptions').addEventListener('click', () => $('dlg-assumptions').showModal());
-    $('open-compare').addEventListener('click', () => { renderCompare(); $('dlg-compare').showModal(); });
+    $('compare-fares').addEventListener('click', () => { showFareComparison = true; renderCompare(); });
+    $('open-compare').addEventListener('click', () => { failedDays.clear(); $('dlg-compare').showModal(); renderCompare(); });
     document.addEventListener('keydown', (e) => { if (e.code === 'Space' && e.target === document.body) { e.preventDefault(); $('play').click(); } });
     // mot d'accueil à la première visite
     let seen = false;

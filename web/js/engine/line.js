@@ -190,6 +190,18 @@
       }
     }
 
+    /**
+     * Pour l'affichage seulement : point kilométrique du véhicule v `ahead` secondes (moins d'un pas) après le
+     * dernier pas calculé à l'instant t, sans rien changer à l'état. Même courbe que step() entre deux stations ;
+     * à l'arrêt, en réserve ou retenu derrière un quai occupé, le véhicule reste où le moteur l'a mis.
+     */
+    drawS(v, t, ahead) {
+      if (v.state !== 'run' || t >= v.t1 || !(ahead > 0)) return v.s;
+      if (t + ahead >= v.t1) return this.platformBusy(v.to, v.dir, v) ? this.st[v.to].s - (v.dir === 0 ? 1 : -1) * (this.p.length + 6) : this.st[v.to].s;
+      const u = (t + ahead - v.t0) / (v.t1 - v.t0), e = u * u * (3 - 2 * u);
+      return this.st[v.from].s + (this.st[v.to].s - this.st[v.from].s) * e;
+    }
+
     platformBusy(i, d, self) {
       for (const o of this.vehicles) if (o !== self && o.active && o.dir === d && o.state === 'dwell' && o.at === i) return true;
       return false;

@@ -17,7 +17,15 @@
       this.eseg = Int32Array.from(data.edges.seg);
       this.erev = Uint8Array.from(data.edges.rev);
       this.efree0 = Float32Array.from(data.edges.speed, (v) => v / 3.6);
-      this.ecap0 = Float32Array.from(data.edges.cap);
+      this.ecap0 = Float32Array.from(data.edges.cap); // capacité de base à l'heure courante (véh/h)
+      // voies réservées permanentes (bus, taxi, covoiturage), déjà retirées de elanes
+      this.ebus = data.edges.bus ? Uint8Array.from(data.edges.bus) : new Uint8Array(E);
+      // capacités propres aux heures de pointe : [arête, véh/h, minute de début, minute de fin[
+      this.ecapPerm = Float32Array.from(data.edges.cap); // capacité permanente (véh/h)
+      this.peaks = data.peaks || [];
+      this.peakEdges = Array.from(new Set(this.peaks.map((p) => p[0])));
+      this.peakBounds = Array.from(new Set(this.peaks.flatMap((p) => [p[2], p[3]]))).sort((a, b) => a - b);
+      this.peakNext = Infinity; // prochaine borne de plage (s) ; posée par setTime
       this.ecap = new Float32Array(E);
       this.elin = Float32Array.from(this.ecls, (c) => (c === 0 || c === 1 || c === 5 ? P.linearDelay.motorway : P.linearDelay.street));
       this.et0 = new Float32Array(E); // temps libre (s)
@@ -86,26 +94,46 @@
 
     /** Applique le retrait d'une voie le long du tracé (site propre), la voie réservée aux Cybercab, l'hiver et le parc autonome. */
     setConditions(c) {
-      const P = TQ.PARAMS;
       this.cond = c;
       this.cabLane = !!c.cabLane;
+      for (let e = 0; e < this.E; e++) this.applyEdge(e);
+    }
+
+    /** Capacité, temps libre et temps courant de l'arête e, selon les conditions et la capacité de base du moment. */
+    applyEdge(e) {
+      const P = TQ.PARAMS, c = this.cond;
       const vLane = (P.cabLane.speed / 3.6) * (c.winter ? P.winterSpeed : 1);
-      for (let e = 0; e < this.E; e++) {
-        let cap = this.ecap0[e], v = this.efree0[e];
-        if (c.laneDrop && this.ecor[e]) {
-          const l = this.elanes[e];
-          cap *= l >= 2 ? (l - 1) / l : 0.85;
-        }
-        const cl = this.ecls[e], fast = cl === 0 || cl === 1 || cl === 5;
-        if (c.auto) { cap *= fast ? P.auto.motorwayCap : P.auto.streetCap; if (!fast) v *= P.auto.streetSpeed; }
-        this.elin[e] = (c.auto ? P.auto.linearDelay : P.linearDelay)[fast ? 'motorway' : 'street'];
-        if (c.winter) { cap *= P.winterCap; v *= P.winterSpeed; }
-        this.ecap[e] = cap;
-        this.et0[e] = this.elen[e] / v;
-        this.ett[e] = this.travelTime(e, this.eflow[e]);
-        this.elane0[e] = this.elen[e] / vLane;
-        this.ecabT[e] = this.cabTime(e);
+      let cap = this.ecap0[e], v = this.efree0[e];
+      // là où une voie est déjà réservée en permanence, le site propre prend sa place : pas de second retrait
+      if (c.laneDrop && this.ecor[e] && !this.ebus[e]) {
+        const l = this.elanes[e];
+        cap *= l >= 2 ? (l - 1) / l : 0.85;
       }
+      const cl = this.ecls[e], fast = cl === 0 || cl === 1 || cl === 5;
+      if (c.auto) { cap *= fast ? P.auto.motorwayCap : P.auto.streetCap; if (!fast) v *= P.auto.streetSpeed; }
+      this.elin[e] = (c.auto ? P.auto.linearDelay : P.linearDelay)[fast ? 'motorway' : 'street'];
+      if (c.winter) { cap *= P.winterCap; v *= P.winterSpeed; }
+      this.ecap[e] = cap;
+      this.et0[e] = this.elen[e] / v;
+      this.ett[e] = this.travelTime(e, this.eflow[e]);
+      this.elane0[e] = this.elen[e] / vLane;
+      this.ecabT[e] = this.cabTime(e);
+    }
+
+    /**
+     * Cale les capacités de pointe sur l'heure t (secondes ; minuit = multiples de 86 400) et note la prochaine borne.
+     * À appeler à chaque remise à zéro, puis quand t atteint peakNext ; seules les arêtes de data.peaks sont recalculées.
+     */
+    setTime(t) {
+      const B = this.peakBounds;
+      if (!B.length) return;
+      const day = Math.floor(t / 86400), m = (t - day * 86400) / 60;
+      let i = 0;
+      while (i < B.length && B[i] <= m) i++;
+      this.peakNext = i < B.length ? day * 86400 + B[i] * 60 : (day + 1) * 86400 + B[0] * 60;
+      for (const e of this.peakEdges) this.ecap0[e] = this.ecapPerm[e];
+      for (const p of this.peaks) if (m >= p[2] && m < p[3]) this.ecap0[p[0]] = p[1];
+      for (const e of this.peakEdges) this.applyEdge(e);
     }
 
     /** Temps d'un Cybercab sur l'arête e. En voie réservée, les convois coordonnés ne subissent ni feux ni autos. */
@@ -204,6 +232,22 @@
     /** Temps de parcours auto (s) du point de demande o au point de demande d. */
     carTime(o, d) { return this.tdist[d][this.dnode[o]]; }
 
+    /**
+     * Longueur (m) de l'itinéraire qu'une auto prendrait maintenant du point de demande o au point de demande d :
+     * la somme des tronçons de l'arbre des plus courts chemins, celui que suivent les autos qui roulent.
+     * Retourne -1 si la destination n'est pas joignable.
+     */
+    routeLen(o, d) {
+      const tn = this.tnext[d], goal = this.dnode[d], eb = this.eb, elen = this.elen;
+      let node = this.dnode[o], len = 0;
+      for (let guard = this.N; node !== goal; guard--) {
+        const e = tn[node];
+        if (e < 0 || guard <= 0) return -1;
+        len += elen[e]; node = eb[e];
+      }
+      return len;
+    }
+
     // ------------------------------------------------------------------ véhicules
     initVehicles() {
       const cap = 4096;
@@ -214,6 +258,7 @@
       // pour l'affichage seulement : numéro propre à chaque véhicule et les derniers tronçons quittés, du plus récent au plus ancien (-1 au départ)
       this.vId = new Int32Array(cap); this.vPrev = new Int32Array(cap); this.vPrev2 = new Int32Array(cap); this.vPrev3 = new Int32Array(cap); this.vPrev4 = new Int32Array(cap); this.vSeq = 0;
       this.stats = [0, 1, 2, 3].map(() => ({ vkm: 0, vh: 0, vhFree: 0 }));
+      this.cabLaneVkm = 0; // véh-km de Cybercab parcourus sur les arêtes de la voie réservée (0 sans voie)
       this.win = { len: 0, time: 0, free: 0 }; // fenêtre glissante pour la vitesse moyenne
     }
 
@@ -262,6 +307,7 @@
           const km = (w * elen[e]) / 1000;
           st.vkm += km; st.vh += (w * vTT[i]) / 3600; st.vhFree += (w * et0[e]) / 3600;
           if (vType[i] > 0 && this.cabKm) this.cabKm[vPay[i]] += elen[e] / 1000; // odomètre du Cybercab
+          if (lane && vType[i] > 0 && ecor[e]) this.cabLaneVkm += km; // kilomètres faits dans la voie réservée
           // la vitesse et le temps perdu affichés sont ceux des autos
           if (vType[i] === 0) { this.win.len += w * elen[e]; this.win.time += w * vTT[i]; this.win.free += w * et0[e]; }
           const node = eb[e];
@@ -294,6 +340,30 @@
         }
         if (p >= 0) vProg[i] = p > 1 ? 1 : p;
       }
+    }
+
+    /**
+     * Pour l'affichage seulement : où sera le véhicule i dans `ahead` secondes (moins d'un pas), sans rien changer
+     * à l'état du moteur. Même calcul que stepVehicles : il finit son tronçon, puis prend le suivant de son trajet.
+     * Écrit dans o : e (tronçon), p (fraction parcourue), tt (temps de parcours de ce tronçon, s),
+     * hops (tronçons franchis). Un véhicule qui atteint sa destination attend au bout de son tronçon :
+     * ce qu'il fait ensuite (s'effacer, repartir vers un client) ne se décide qu'au pas suivant.
+     */
+    aheadOf(i, ahead, o) {
+      let e = this.vEdge[i], tt = this.vTT[i], p = this.vProg[i] + ahead / tt, hops = 0;
+      if (p >= 1) {
+        const cab = this.vType[i] > 0, dest = this.vDest[i], goal = this.dnode[dest];
+        const tn = (cab && this.cabLane ? this.tnextC : this.tnext)[dest], et = cab ? this.ecabT : this.ett, vr = this.vVar[i];
+        while (p >= 1 && hops < 8) {
+          const node = this.eb[e], ne = node === goal ? -1 : tn[node];
+          if (ne < 0) { p = 1; break; }
+          const left = (p - 1) * tt;
+          e = ne; tt = et[ne] * vr; p = left / tt; hops++;
+        }
+        if (p > 1) p = 1;
+      }
+      o.e = e; o.p = p; o.tt = tt; o.hops = hops;
+      return o;
     }
 
     /** Position (lon, lat) à la fraction f de l'arête e, décalée à droite pour les rues à double sens. */
@@ -344,6 +414,7 @@
       this.ecntC.fill(0); this.eflowC.fill(0);
       for (let e = 0; e < this.E; e++) { this.ett[e] = this.et0[e]; this.ecabT[e] = this.cabTime(e); }
       this.stats.forEach((s) => { s.vkm = 0; s.vh = 0; s.vhFree = 0; });
+      this.cabLaneVkm = 0;
       this.win = { len: 0, time: 0, free: 0 };
     }
   }

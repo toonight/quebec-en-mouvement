@@ -43,9 +43,9 @@
       <label class="slider"><span>Tarif au kilomètre <output id="fare-out"></output></span>
         <input type="range" id="fare" min="0.3" max="2" step="0.1" value="1.2"></label>
       <label class="check"><input type="checkbox" id="pool"> Courses partagées : deux voyageurs seuls par véhicule, 20 % de rabais</label>
-      <label class="slider"><span>Résidents qui renoncent à leur auto <output id="carfree-out"></output></span>
+      <label class="slider"><span>Abandon de l'auto : part des déplacements automobiles concernés dans la zone desservie <output id="carfree-out"></output></span>
         <input type="range" id="carfree" min="0" max="30" step="1" value="0"></label>
-      <p class="hint">Scénario prospectif : aucun robotaxi n'est autorisé au Québec hors projet pilote. La part de résidents sans auto est une supposition, à vous de la choisir.</p>
+      <p class="hint">Scénario prospectif : aucun robotaxi n'est autorisé au Québec hors projet pilote. La part des déplacements automobiles faits sans auto est une supposition, à vous de la choisir. Le tirage se fait déplacement par déplacement, pas résident par résident.</p>
     </div>
   </section>
 
@@ -139,6 +139,7 @@
       <div><dt>Demandes sans véhicule</dt><dd id="k-unserved">–</dd></div>
       <div><dt>Vitesse moyenne</dt><dd id="k-cspeed">–</dd></div>
       <div id="row-pooled" hidden><dt>Passagers en course partagée</dt><dd id="k-pooled">–</dd></div>
+      <div id="row-lane" hidden><dt>Kilomètres faits dans la voie réservée</dt><dd id="k-lane">–</dd></div>
     </dl>
   </section>
   <section id="sec-econ" hidden>
@@ -158,8 +159,9 @@
     <p class="hint">Le bilan pour la société (temps gagné, CO₂) se lit dans la comparaison, une fois la journée terminée.</p>
   </section>
   <section>
-    <h2>Climat</h2>
-    <p class="co2"><strong id="k-co2">–</strong> <span id="k-co2-label">tonnes de CO₂ évitées depuis le départ</span></p>
+    <h2 id="k-co2-title">CO₂ évité par les trajets auto remplacés</h2>
+    <p class="co2"><strong id="k-co2">–</strong> <span id="k-co2-label">tonnes évitées depuis le départ</span></p>
+    <p class="hint">Les émissions du nouveau service sont déduites.</p>
   </section>
 </aside>
 
@@ -232,6 +234,7 @@
   <p class="lead">Chaque journée complète, simulée de 5 h à 5 h sans changement de scénario, s'ajoute ici. Changez de scénario et laissez tourner à la vitesse maximum pour comparer.</p>
   <p class="actions"><button class="link" id="run-day">Simuler la journée complète de ce scénario</button>
     <button class="link" id="run-all">Simuler quatre scénarios types (tramway, bus, voie réservée aux Cybercab, Cybercab seuls)</button></p>
+  <button class="link" id="compare-fares" hidden>Comparer le prix de la course entière et le prix par occupant</button>
   <div id="compare"></div>
 </dialog>
 
