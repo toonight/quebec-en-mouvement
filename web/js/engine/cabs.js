@@ -9,7 +9,7 @@
     /**
      * net : TQ.Network ; mask : Uint8Array par point de demande (1 = desservi) ;
      * fleetReal : nombre de véhicules réels ; opts.pool : courses partagées.
-     * Les temps de parcours viennent de net.cdist : ceux des Cybercab, voie réservée comprise.
+     * Les temps de parcours viennent de net.tdist : ceux des autos, dans la même circulation.
      */
     constructor(net, mask, fleetReal, pointInfo, rnd, winter, opts) {
       const P = TQ.PARAMS, C = P.cab;
@@ -61,7 +61,7 @@
       this.recent[this.recentN++ & 255] = o;
       // course partagée : se joindre à un véhicule déjà en route, s'il a un siège libre et que le détour reste court
       if (this.pool && this.rnd() < this.poolSeat && this.share(o, d, t, zone, fare)) return true;
-      const dist = net.cdist[o], dn = net.dnode;
+      const dist = net.tdist[o], dn = net.dnode;
       let best = -1, bestEta = C.maxEtaMin * 60;
       const state = this.state, point = this.point;
       for (let i = 0; i < this.n; i++) {
@@ -91,7 +91,7 @@
      * et l'y ajoute. Retourne true si la demande est jumelée.
      */
     share(o, d, t, zone, fare) {
-      const net = this.net, C = TQ.PARAMS.cab, T = net.cdist, dn = net.dnode;
+      const net = this.net, C = TQ.PARAMS.cab, T = net.tdist, dn = net.dnode;
       const maxWait = Math.min(C.poolMaxWaitMin, C.maxEtaMin) * 60, maxDet = C.poolMaxDetourMin * 60;
       const no = dn[o], nd = dn[d], direct = T[d][no];
       if (direct >= FAR || no === nd) return false;
@@ -215,13 +215,14 @@
       if (t - this.lastRebalance < 300) return;
       this.lastRebalance = t;
       // quand des véhicules sont libres, le souvenir des refus et des longues attentes s'estompe
+      // (une attente déjà plus courte que 4 min reste telle qu'elle a été mesurée)
       let idle = 0;
       for (let i = 0; i < this.n; i++) if (this.state[i] === IDLE) idle++;
       if (idle > 0) {
         const share = idle / this.n;
         for (let z = 0; z < this.rejectEma.length; z++) {
           this.rejectEma[z] *= 0.9;
-          if (share > 0.3) this.waitEma[z] += (4 - this.waitEma[z]) * 0.1;
+          if (share > 0.3 && this.waitEma[z] > 4) this.waitEma[z] += (4 - this.waitEma[z]) * 0.1;
         }
       }
       let moves = Math.ceil(this.n * 0.03);
@@ -236,7 +237,7 @@
           const tz = target >= 0 ? Math.max(0, this.info[target].zone) : 0;
           const needed = this.waitEma[tz] > 5 || this.rejectEma[tz] > 0.05;
           this.tFree[i] = t;
-          if (needed && target >= 0 && this.net.cdist[target][this.net.dnode[from]] > 300) {
+          if (needed && target >= 0 && this.net.tdist[target][this.net.dnode[from]] > 300) {
             this.dest[i] = target;
             if (this.net.addVehicle(1, this.net.dnode[from], target, this.w, i, this.rnd)) { this.state[i] = REPOSITION; this.stats.repositions++; moves--; }
           }

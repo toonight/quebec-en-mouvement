@@ -25,13 +25,14 @@
       <button role="radio" data-line="none" aria-checked="false"><span class="swatch sw-none"></span>Rien (aujourd'hui)</button>
       <button role="radio" data-line="tram" aria-checked="true"><span class="swatch sw-tram"></span>Tramway TramCité</button>
       <button role="radio" data-line="bus" aria-checked="false"><span class="swatch sw-bus"></span>Bus en voies réservées</button>
-      <button role="radio" data-line="cablane" aria-checked="false"><span class="swatch sw-cab"></span>Voie réservée aux Cybercab</button>
+      <button role="radio" data-line="cab" aria-checked="false"><span class="swatch sw-cab"></span>Cybercab (sans ligne)</button>
     </div>
     <p class="hint" id="line-hint"></p>
   </section>
 
   <section>
     <h2>Flotte de Cybercab</h2>
+    <p class="hint">Les Cybercab remplacent le tramway ou l'autobus, ils ne s'y ajoutent pas : choisir une zone retire la ligne. La flotte roule dans la circulation générale, avec les autos.</p>
     <div class="choice" role="radiogroup" aria-label="Zone desservie par les Cybercab" id="cab-choice">
       <button role="radio" data-cab="off" aria-checked="true"><span class="swatch sw-none"></span>Aucune</button>
       <button role="radio" data-cab="corridor" aria-checked="false"><span class="swatch sw-cab"></span>Le long du tracé</button>
@@ -43,9 +44,9 @@
       <label class="slider"><span>Tarif au kilomètre <output id="fare-out"></output></span>
         <input type="range" id="fare" min="0.3" max="2" step="0.1" value="1.2"></label>
       <label class="check"><input type="checkbox" id="pool"> Courses partagées : deux voyageurs seuls par véhicule, 20 % de rabais</label>
-      <label class="slider"><span>Résidents qui renoncent à leur auto <output id="carfree-out"></output></span>
+      <label class="slider"><span>Abandon de l'auto : part des déplacements automobiles concernés dans la zone desservie <output id="carfree-out"></output></span>
         <input type="range" id="carfree" min="0" max="30" step="1" value="0"></label>
-      <p class="hint">Scénario prospectif : aucun robotaxi n'est autorisé au Québec hors projet pilote. La part de résidents sans auto est une supposition, à vous de la choisir.</p>
+      <p class="hint">Scénario prospectif : aucun robotaxi n'est autorisé au Québec hors projet pilote. La part des déplacements automobiles faits sans auto est une supposition, à vous de la choisir. Le tirage se fait déplacement par déplacement, pas résident par résident.</p>
     </div>
   </section>
 
@@ -158,8 +159,9 @@
     <p class="hint">Le bilan pour la société (temps gagné, CO₂) se lit dans la comparaison, une fois la journée terminée.</p>
   </section>
   <section>
-    <h2>Climat</h2>
-    <p class="co2"><strong id="k-co2">–</strong> <span id="k-co2-label">tonnes de CO₂ évitées depuis le départ</span></p>
+    <h2 id="k-co2-title">CO₂ évité par les trajets auto remplacés</h2>
+    <p class="co2"><strong id="k-co2">–</strong> <span id="k-co2-label">tonnes évitées depuis le départ</span></p>
+    <p class="hint">Les émissions du nouveau service sont déduites.</p>
   </section>
 </aside>
 
@@ -199,7 +201,7 @@
   <h2>Québec en mouvement</h2>
   <p class="lead">Que se passe-t-il dans les rues de Québec avec un tramway, un bus en voies réservées ou des robotaxis ? Ce simulateur rejoue une journée de semaine sur le réseau réel pour comparer les trois.</p>
   <ul>
-    <li><b>Choisissez un scénario</b> dans le panneau de gauche : le mode sur le tracé, puis une flotte de Cybercab si vous voulez.</li>
+    <li><b>Choisissez un scénario</b> dans le panneau de gauche, avec un seul mode sur le tracé : rien, tramway, autobus ou Cybercab (sans ligne). Pour les Cybercab, choisissez ensuite la zone, la taille de la flotte et le tarif.</li>
     <li><b>Regardez la journée défiler</b> : chaque point pâle représente quatre autos, les rues virent à l'ambre puis au rouge quand elles se chargent.</li>
     <li><b>Passez en vue 3D</b> (bouton en haut de la carte) pour voir la ville en volume et chaque véhicule sur sa voie. Avec une clé Google, « Bâtiments réels » affiche la ville photographiée.</li>
     <li><b>Comparez</b> l'achalandage, la rentabilité et le bilan pour la société dans « Comparer les journées simulées ».</li>
@@ -231,7 +233,8 @@
   <h2>Journées simulées</h2>
   <p class="lead">Chaque journée complète, simulée de 5 h à 5 h sans changement de scénario, s'ajoute ici. Changez de scénario et laissez tourner à la vitesse maximum pour comparer.</p>
   <p class="actions"><button class="link" id="run-day">Simuler la journée complète de ce scénario</button>
-    <button class="link" id="run-all">Simuler quatre scénarios types (tramway, bus, voie réservée aux Cybercab, Cybercab seuls)</button></p>
+    <button class="link" id="run-all">Simuler quatre scénarios types (tramway, autobus, Cybercab le long du tracé, Cybercab sur le réseau élargi)</button></p>
+  <button class="link" id="compare-fares" hidden>Comparer le prix de la course entière et le prix par occupant</button>
   <div id="compare"></div>
 </dialog>
 

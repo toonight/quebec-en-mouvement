@@ -4,6 +4,13 @@
   const PERIOD_OF_HOUR = [];
   for (let h = 0; h < 24; h++) PERIOD_OF_HOUR.push(h >= 6 && h < 9 ? 'A' : h >= 9 && h < 15 ? 'H' : h >= 15 && h < 18 ? 'P' : 'N');
   const MODES = ['auto', 'rtc', 'actif', 'autre', 'line', 'cab'];
+  // pas physique du moteur, en secondes. Ne pas le changer sans tout remesurer : les résultats en dépendent
+  // (une demande tirée par pas, départs et arrivées de la ligne détectés aux frontières de pas).
+  const STEP = 2;
+
+  // compatibilité : l'ancienne voie réservée aux Cybercab (line 'cablane') n'existe plus, ce scénario devient line 'none'.
+  // La page, elle, ajoute une flotte le long du tracé à un ancien lien « ligne=cablane » sans flotte (app.js, readHash).
+  const compatLine = (sc) => { if (sc.line === 'cablane') sc.line = 'none'; };
 
   class Simulation {
     constructor(data, opts) {
@@ -12,8 +19,8 @@
       this.P = TQ.PARAMS;
       this.seed = opts.seed || 20261119;
       this.net = new TQ.Network(data, { trees: false });
-      // line : none | tram | bus | cablane (voie réservée aux Cybercab : un seul type de véhicule par voie) ;
-      // pool : courses partagées ; carFree : part des résidents de la zone desservie qui renoncent à leur auto
+      // line : none | tram | bus ; cab : off | corridor | wide (la flotte roule avec les autos) ;
+      // pool : courses partagées ; carFree : part des déplacements automobiles des personnes qui habitent la zone desservie faits sans auto (tirage par déplacement)
       this.scenario = Object.assign({ line: 'none', cab: 'off', fleet: 3000, farePerKm: this.P.cab.farePerKm, winter: false, pool: false, carFree: 0, auto: false }, opts.scenario || {});
       this.history = [];
       this.day = 1;
@@ -120,20 +127,23 @@
     reset(start) {
       this.resets = (this.resets || 0) + 1; // l'affichage s'en sert pour oublier les véhicules de la journée précédente
       const sc = this.scenario, P = this.P;
+      compatLine(sc);
       // flux aléatoires indépendants : la demande tirée ne dépend pas du scénario
       // et chaque journée rejoue le même tirage : les journées comparées, et la référence, ont la même demande
       this.rndDemand = TQ.rng(this.seed + 7919);
       this.rnd = TQ.rng((this.seed ^ 0x9e3779b9) + 104729);
       const rndLine = TQ.rng((this.seed ^ 0xc2b2ae35) + 1), rndCab = TQ.rng((this.seed ^ 0x27d4eb2f) + 1);
+      // flux à part pour le repli des déplacements faits sans auto : sans l'option, aucun tirage n'y est fait
+      this.rndNoCar = TQ.rng((this.seed ^ 0x165667b1) + 1);
       this.t = start; this.tDayStart = start;
+      this.stepRest = 0; // secondes demandées à step() et pas encore simulées (toujours moins d'un pas)
       this.tDayEnd = P.dayStart + 86400 * (Math.floor((start - P.dayStart) / 86400) + 1); // prochaine frontière de 5 h
-      // la voie du tracé sert aux Cybercab quand elle leur est réservée
-      this.cabLane = sc.cab !== 'off' && sc.line === 'cablane';
-      // sans flotte, la voie réservée aux Cybercab n'existe pas : les autos gardent leurs voies
-      this.net.setConditions({ laneDrop: sc.line === 'tram' || sc.line === 'bus' || this.cabLane, winter: sc.winter, cabLane: this.cabLane, auto: !!sc.auto });
+      this.net.setTime(start); // capacités de pointe de l'heure de départ
+      // le tramway ou les bus prennent une voie du tracé aux autos
+      this.net.setConditions({ laneDrop: sc.line === 'tram' || sc.line === 'bus', winter: sc.winter, auto: !!sc.auto });
       this.net.resetTraffic();
-      for (let d = 0; d < this.net.D; d++) { this.net.computeTree(d); if (this.cabLane) this.net.computeTree(d, true); }
-      this.line = sc.line === 'none' || sc.line === 'cablane' ? null : new TQ.TransitLine(this.data.line, sc.line, rndLine, sc.winter);
+      for (let d = 0; d < this.net.D; d++) this.net.computeTree(d);
+      this.line = sc.line === 'none' ? null : new TQ.TransitLine(this.data.line, sc.line, rndLine, sc.winter);
       this.fleet = null; this.net.cabKm = null; this.net.cabIdx = null;
       if (sc.cab !== 'off') {
         const mask = new Uint8Array(this.info.length);
@@ -151,6 +161,8 @@
         trips: 0, modes: { auto: 0, rtc: 0, actif: 0, autre: 0, line: 0, cab: 0 },
         lineFrom: { auto: 0, rtc: 0, actif: 0 }, cabFrom: { auto: 0, rtc: 0, actif: 0, line: 0 },
         carsRemoved: 0, divertedCarKm: 0, local: 0, cabUnserved: 0, crowKm: 0, gainMin: 0, fromRtc: 0, toRtc: 0, carFree: 0,
+        // déplacements faits sans auto : écart net de coût généralisé avec l'auto (minutes), puis modes de repli et kilomètres
+        carFreeGapMin: 0, carFreeCabFare: 0, carFreeModes: { rtc: 0, walk: 0, bike: 0, line: 0, cab: 0 }, carFreeKm: { rtc: 0, walk: 0, bike: 0, line: 0, cab: 0 },
       };
       this.series = { t: [], speed: [], congestion: [], lineLoad: [], lineBoard: [], cabWait: [], cars: [] };
       this.lastBoard = 0;
@@ -165,11 +177,11 @@
 
     scenarioLabel() {
       const s = this.scenario, parts = [];
-      if (s.line === 'tram') parts.push('Tramway'); else if (s.line === 'bus') parts.push('Bus voies réservées'); else if (s.line === 'cablane' && s.cab !== 'off') parts.push('Voie réservée aux Cybercab');
+      if (s.line === 'tram') parts.push('Tramway'); else if (s.line === 'bus') parts.push('Bus voies réservées');
       const extra = [];
       if (s.farePerKm !== this.P.cab.farePerKm) extra.push(`${s.farePerKm.toFixed(2).replace('.', ',')} $/km`);
       if (s.pool) extra.push('courses partagées');
-      if (s.carFree > 0) extra.push(`${Math.round(s.carFree * 100)} % sans auto`);
+      if (s.carFree > 0) extra.push(`${Math.round(s.carFree * 100)} % des déplacements auto faits sans auto`);
       if (s.cab !== 'off') parts.push(`Cybercab ${s.cab === 'corridor' ? 'corridor' : 'réseau élargi'} (${[s.fleet.toLocaleString('fr-CA'), ...extra].join(', ')})`);
       if (!parts.length) parts.push('Référence (situation actuelle)');
       if (s.auto) { if (parts[0] === 'Référence (situation actuelle)') parts[0] = 'Autos autonomes, sans feux'; else parts.push('autos autonomes'); }
@@ -178,19 +190,29 @@
     }
 
     // ------------------------------------------------------------------ boucle
-    /** Avance la simulation de dt secondes (découpées en pas de 2 s au plus). */
+    /**
+     * Avance la simulation de dt secondes. Le moteur ne calcule que des pas entiers de STEP secondes (2 s) :
+     * le temps qui ne remplit pas un pas est gardé dans stepRest et s'ajoute à l'appel suivant. Le résultat ne
+     * dépend donc ni de la cadence des appels ni de la vitesse d'animation, seulement du temps total demandé.
+     * Tant qu'il attend, ce reste n'est pas simulé : this.t et summary() s'arrêtent au dernier pas entier.
+     */
     step(dt) {
-      while (dt > 1e-9) {
-        const h = Math.min(2, dt);
-        this.tick(h);
-        dt -= h;
-      }
+      if (!(dt > 0) || !isFinite(dt)) return; // un temps infini ne finirait jamais
+      // variable locale : une fin de journée au milieu de la boucle appelle reset(), qui ne doit pas effacer le temps restant
+      let rest = this.stepRest + dt;
+      // (la marge absorbe les erreurs d'arrondi d'une somme de petits intervalles)
+      while (rest >= STEP - 1e-9) { this.tick(STEP); rest -= STEP; }
+      this.stepRest = rest > 0 ? rest : 0;
     }
+
+    /** Part du pas en attente (0 à 1) : l'affichage s'en sert pour dessiner les véhicules entre deux pas. */
+    get stepFraction() { return this.stepRest / STEP; }
 
     tick(dt) {
       const net = this.net, P = this.P;
       this.t += dt;
       const t = this.t;
+      if (t >= net.peakNext) net.setTime(t); // début ou fin d'une plage de pointe
       this.generate(dt);
       // voyageurs arrivant aux stations après leur trajet d'accès
       const minute = Math.floor(t / 60);
@@ -287,7 +309,8 @@
       // gain du voyageur qui change de mode : moitié de l'écart de coût généralisé (minutes) avec son mode d'origine
       const gtBase = base === 0 ? gtCar : base === 1 ? gtRtc : gtAct;
       let gain = 0;
-      // ménage qui a renoncé à son auto parce que la flotte dessert son quartier : ce déplacement se fait sans auto
+      // abandon de l'auto : ce déplacement automobile d'une personne qui habite la zone desservie se fait sans auto
+      // (tirage par déplacement : le modèle ne suit pas les personnes ni les ménages)
       const noCar = base === 0 && this.fleet && this.scenario.carFree > 0 && home != null && this.cabMask[home] === 1 && rnd() < this.scenario.carFree;
       let lineChoice = null, gtLine = Infinity;
       // --- report vers la ligne structurante
@@ -311,19 +334,22 @@
       }
       // --- report vers le Cybercab
       const cabOk = this.fleet && base !== 3 && this.cabMask[o] && this.cabMask[d];
-      let cabFare = 0, cabZone = 0, gtCabNoCar = Infinity;
+      let cabFare = 0, cabZone = 0, cabChoiceNoCar = Infinity, cabFullCost = Infinity;
       if (cabOk) {
         const C = P.cab, zone = A.zone < 0 ? 0 : A.zone, pool = this.scenario.pool;
         // course partagée : rabais sur le prix, contre un détour possible
         const fare = (C.fareBase + this.scenario.farePerKm * km) * (pool ? 1 - C.poolDiscount : 1);
         const vot = mode === 4 || base === 1 ? P.votTransit : P.vot;
-        // temps à bord : celui des Cybercab, plus court que celui des autos quand ils ont leur voie
-        const tCab = (this.cabLane ? net.cdist[d][net.dnode[o]] / 60 : tCar) + (pool ? C.poolPerceivedMin : 0);
+        // temps à bord : celui d'une auto, la flotte roule dans la même circulation
+        const tCab = tCar + (pool ? C.poolPerceivedMin : 0);
         const waitCab = P.waitWeight * this.fleet.perceivedWait(zone);
-        const gtCab = waitCab + tCab + (fare / vot) * 60;
+        const perceivedFare = this.scenario.farePerOccupant ? fare / C.occupancy : fare;
+        const gtCab = waitCab + tCab + (perceivedFare / vot) * 60;
         // pour le bilan, le tarif est compté à sa valeur faciale, à la même valeur du temps que le mode d'origine
         const gtCabGain = waitCab + tCab + (fare / P.vot) * 60;
-        cabFare = fare; cabZone = zone; gtCabNoCar = gtCabGain;
+        cabFare = fare; cabZone = zone;
+        cabChoiceNoCar = waitCab + tCab + (perceivedFare / P.vot) * 60;
+        cabFullCost = gtCabGain;
         let p;
         if (noCar) p = 0; else
         if (mode === 4) p = TQ.sigmoid(P.theta * (gtLine - gtCab - 2));
@@ -333,26 +359,42 @@
         if (rnd() < p) {
           if (this.fleet.request(o, d, this.t, zone, fare)) {
             m.cabFrom[mode === 4 ? 'line' : MODES[base]] += sc; mode = 5;
-            gain = Math.max(gain, 0.5 * Math.max(0, gtBase - gtCabGain));
+            // gain du mode finalement pris, y compris pour qui était d'abord passé à la ligne
+            gain = 0.5 * Math.max(0, gtBase - gtCabGain);
           }
           else m.cabUnserved += sc;
         }
       }
-      // sans auto : le voyageur prend la moins coûteuse des solutions qui lui restent
+      // sans auto : le voyageur choisit parmi les solutions qui lui restent, par un logit de même sensibilité (theta)
+      // que le choix modal ordinaire, sans constante propre à un mode. La marche et les autobus actuels sont toujours
+      // possibles ; le vélo ne l'est que pour une part des déplacements, plus faible en hiver.
+      // (gtAct, qui sert au choix modal ordinaire, n'est pas utilisé ici : il suppose un vélo pour tous au-delà de 1,5 km.)
       if (noCar) {
-        const opts = [[gtRtc, 1], [gtAct, 2]];
-        if (lineChoice) opts.push([gtLine, 4]);
-        if (cabOk) opts.push([gtCabNoCar, 5]);
-        opts.sort((x, y) => x[0] - y[0]);
-        for (const [, md] of opts) {
-          if (md === 5) {
-            if (!this.fleet.request(o, d, this.t, cabZone, cabFare)) { m.cabUnserved += sc; continue; }
-            m.cabFrom.auto += sc;
-          }
-          mode = md; break;
+        const N = P.noCar, r2 = this.rndNoCar;
+        const opts = [[gtRtc, 1, 'rtc', 0], [(km * 1000) / P.walkSpeed, 2, 'walk', 0]];
+        if (r2() < N.bikeShare * (this.scenario.winter ? N.bikeWinterFactor : 1)) opts.push([(km / N.bikeSpeedKmh) * 60, 2, 'bike', 0]);
+        if (lineChoice) opts.push([gtLine, 4, 'line', 0]);
+        if (cabOk) opts.push([cabChoiceNoCar, 5, 'cab', 0]);
+        let pick = null;
+        while (!pick) {
+          let best = Infinity, tot = 0;
+          for (const c of opts) if (c[0] < best) best = c[0];
+          for (const c of opts) tot += c[3] = Math.exp(-P.theta * (c[0] - best));
+          let u = r2() * tot, i = 0;
+          while (i < opts.length - 1 && u >= opts[i][3]) { u -= opts[i][3]; i++; }
+          // Cybercab choisi mais aucun véhicule assez proche : le voyageur choisit de nouveau parmi le reste
+          if (opts[i][1] === 5 && !this.fleet.request(o, d, this.t, cabZone, cabFare)) { m.cabUnserved += sc; opts.splice(i, 1); continue; }
+          pick = opts[i];
         }
+        mode = pick[1];
+        // tarif facial des courses Cybercab imposées : le bilan en tire le rabais d'occupation de ces voyageurs (econ.js)
+        if (mode === 5) { m.cabFrom.auto += sc; m.carFreeCabFare += cabFare * sc; }
         m.carFree += sc;
         if (mode === 1) m.toRtc += sc;
+        // écart net de coût généralisé entre l'auto et le mode imposé : compté en entier, gains comme pertes
+        // (ce voyageur n'a pas choisi : la règle de la moitié ne s'applique pas). Tarif du Cybercab à sa valeur faciale.
+        m.carFreeGapMin += (gtCar - (mode === 5 ? cabFullCost : pick[0])) * sc;
+        m.carFreeModes[pick[2]] += sc; m.carFreeKm[pick[2]] += sc * km;
       }
       m.modes[MODES[mode]] += sc;
       if (mode >= 4) { m.gainMin += gain * sc; if (base === 1) m.fromRtc += sc; }
@@ -361,7 +403,13 @@
         const at = Math.floor((this.t + lineChoice.access * 60) / 60);
         this.pending[Math.min(at, this.pendingMin + 62) & 63].push(lineChoice);
       }
-      if (base === 0 && mode !== 0) { m.carsRemoved += sc / P.carOccupancy; m.divertedCarKm += (sc / P.carOccupancy) * km; }
+      if (base === 0 && mode !== 0) {
+        // kilomètres d'auto évités : la longueur de l'itinéraire que cette auto aurait pris sur le réseau, comptée
+        // comme les kilomètres des autos qui roulent (network.js, stepVehicles). « km » (vol d'oiseau × 1,3) ne sert
+        // qu'au choix modal et aux tarifs.
+        const route = net.routeLen(o, d);
+        m.carsRemoved += sc / P.carOccupancy; m.divertedCarKm += (sc / P.carOccupancy) * (route >= 0 ? route / 1000 : km);
+      }
       if (mode === 0) net.addVehicle(0, net.dnode[o], d, sc / P.carOccupancy, 0, rnd);
     }
 
@@ -373,7 +421,9 @@
         trips: m.trips, avgCrowKm: m.trips ? m.crowKm / m.trips : 0, modes: Object.assign({}, m.modes), carsRemoved: m.carsRemoved,
         carVkm: ns[0].vkm, carVh: ns[0].vh, carDelayH: ns[0].vh - ns[0].vhFree,
         avgSpeed: ns[0].vh > 0 ? ns[0].vkm / ns[0].vh : 0, congestion: ns[0].vhFree > 0 ? ns[0].vh / ns[0].vhFree - 1 : 0,
-        lineFrom: Object.assign({}, m.lineFrom), cabFrom: Object.assign({}, m.cabFrom), riderGainH: m.gainMin / 60, fromRtc: m.fromRtc, toRtc: m.toRtc, carFree: m.carFree, cabLane: !!this.cabLane,
+        lineFrom: Object.assign({}, m.lineFrom), cabFrom: Object.assign({}, m.cabFrom), riderGainH: m.gainMin / 60, fromRtc: m.fromRtc, toRtc: m.toRtc, carFree: m.carFree,
+        // déplacements faits sans auto : écart net de coût généralisé avec l'auto, en heures (négatif : ils y perdent)
+        carFreeGapH: m.carFreeGapMin / 60, carFreeCabFare: m.carFreeCabFare, carFreeModes: Object.assign({}, m.carFreeModes), carFreeKm: Object.assign({}, m.carFreeKm),
       };
       let co2Added = 0;
       if (L) {
@@ -396,6 +446,8 @@
       }
       // parc autonome : toutes les autos sont électriques, celles qui roulent encore n'émettent presque plus
       const auto = !!this.scenario.auto, carCO2 = auto ? P.auto.kwhKm * P.gridCO2 : P.carCO2;
+      // Tous les termes sont en kilomètres réellement parcourus sur le réseau simulé : itinéraire des autos évitées,
+      // kilomètres des Cybercab (réseau et rues locales), kilomètres des rames ou des bus sur la ligne.
       // (un kilomètre d'auto supprimé reste compté au facteur du parc actuel, à essence : même base pour les deux termes)
       out.co2Avoided = (m.divertedCarKm * P.carCO2 - co2Added + (auto ? ns[0].vkm * (P.carCO2 - carCO2) : 0)) / 1000; // tonnes
       out.roadVkm = ns[0].vkm + ns[1].vkm + ns[2].vkm;
@@ -404,5 +456,6 @@
   }
 
   Simulation.MODES = MODES;
+  Simulation.STEP = STEP;
   TQ.Simulation = Simulation;
 })();

@@ -1,7 +1,7 @@
 // Étude des Cybercab : combien d'autos une flotte retire-t-elle, et à partir de quel tarif la congestion baisse ?
 // Usage : node tests/cab_study.js <flotte> <tarif au km> [forfait] [none|tram|bus] [off|corridor|wide]
-//   HOURLY=1 ajoute le détail heure par heure. POOL=1 : courses partagées. CARFREE=0.1 : 10 % de résidents sans auto.
-//   La ligne « cablane » réserve la voie du tracé aux Cybercab.
+//   HOURLY=1 ajoute le détail heure par heure. POOL=1 : courses partagées. CARFREE=0.1 : 10 % des déplacements auto de la zone desservie faits sans auto.
+//   Le Cybercab seul sur le tracé se choisit avec la ligne « none ».
 const { TQ, data } = require('./load');
 const [fleet = '1500', perKm = '1.2', base = '3.5', line = 'none', cab = 'wide'] = process.argv.slice(2);
 TQ.PARAMS.cab.fareBase = +base;

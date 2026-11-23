@@ -29,12 +29,17 @@
     carCostKm: 0.22,
     transitFare: 2.53, // $ par déplacement (recette moyenne au budget 2026 du RTC)
     carCaptivity: -1, // constante de captivité automobile vis-à-vis de la ligne (min) — calée sur la prévision d'achalandage
-    walkSpeed: 80, // m/min
+    walkSpeed: 80, // m/min (4,8 km/h, hypothèse)
     walkWeight: 1.8,
     waitWeight: 1.5,
     walkMax: 1100,
     feederSpeed: 333, // m/min (20 km/h)
     rtcSpeedKmh: 17, // vitesse porte-à-porte des parcours actuels
+    // Abandon de l'auto : modes de repli d'un déplacement fait sans auto. La marche (walkSpeed) est toujours possible.
+    // Vélo : part des déplacements pour lesquels il est disponible (53 % des adultes de Québec ont fait du vélo en 2020,
+    // Vélo Québec ; l'appliquer à chaque déplacement est une hypothèse), facteur d'hiver (190 000 personnes ont roulé
+    // de décembre 2019 à mars 2020 selon l'observatoire de Vélo Québec, sur 3,4 millions de cyclistes adultes au Québec), vitesse porte-à-porte (hypothèse du modèle).
+    noCar: { bikeShare: 0.53, bikeWinterFactor: 0.056, bikeSpeedKmh: 13 },
     // Parc entièrement autonome et connecté (hypothèse) : les autos se coordonnent, les carrefours n'ont plus de feux.
     // Rues : débit par voie proche d'une circulation ininterrompue, vitesse libre sans arrêts aux feux.
     // Autoroutes : pelotons à intervalles courts. Parc électrique.
@@ -61,8 +66,6 @@
         dwellBase: 12, dwellPerPax: 0.09, dwellMax: 110, bonus: 1, ivtWeight: 1.0, kwhKm: 0, co2Km: 0.9,
       },
     },
-    // voie réservée aux Cybercab sur le tracé : vitesse des convois (km/h) et capacité d'une voie (véh/h)
-    cabLane: { speed: 45, capacity: 2400 },
     cab: {
       seats: 2, occupancy: 1.4, batteryKwh: 47.6, kwhKm: 0.11, maxEtaMin: 12, chargeMin: 25, reserve: 0.15,
       fareBase: 3.5, farePerKm: 1.2, captivity: 9, corridorRadius: 1200, rebalanceIdleMin: 20,
