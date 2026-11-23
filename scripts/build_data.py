@@ -1,7 +1,9 @@
 """Construit web/data/network.js (et data/network.json) à partir de data/raw/.
 
 Produit :
-  - graphe routier orienté (classes motorway à tertiary) : noeuds, segments, arêtes
+  - graphe routier orienté (classes motorway à tertiary) : noeuds, segments, arêtes ; voies ouvertes aux autos
+    par sens, voies réservées retirées (bus) et capacités réduites aux heures de pointe (peaks)
+  - rues de raccord des bretelles et carrefours éclatés là où un virage est interdit (turns_off)
   - ligne du tramway (tracé OSM, relation 16197598) et 29 stations projetées sur le tracé
   - arêtes routières longeant le tracé (pour retirer une voie quand le site propre existe)
   - points de demande (domiciles = densité de rues résidentielles ; activités = pôles EOD)
@@ -39,19 +41,70 @@ def load(name):
 # 1. Graphe routier
 # ----------------------------------------------------------------------------
 CLASSES = ["motorway", "trunk", "primary", "secondary", "tertiary", "motorway_link", "link"]
-# capacité par voie (véh/h), vitesse par défaut (km/h), facteur vitesse libre réelle / limite, voies par défaut (par sens)
+# capacité par voie (véh/h), vitesse par défaut (km/h), facteur vitesse libre réelle / limite,
+# voies par défaut d'un sens unique, voies par défaut d'un double sens (par sens)
 CLASS_PARAMS = {
-    "motorway": (2000, 100, 1.02, 2),
-    "trunk": (1700, 80, 0.95, 2),
-    "primary": (950, 50, 0.78, 2),
-    "secondary": (850, 50, 0.74, 1),
-    "tertiary": (700, 50, 0.70, 1),
-    "motorway_link": (1500, 60, 0.95, 1),
-    "link": (800, 50, 0.75, 1),
+    "motorway": (2000, 100, 1.02, 2, 2),
+    "trunk": (1700, 80, 0.95, 2, 2),
+    "primary": (950, 50, 0.78, 2, 1),
+    "secondary": (850, 50, 0.74, 2, 1),
+    "tertiary": (700, 50, 0.70, 2, 1),
+    "motorway_link": (1500, 60, 0.95, 1, 1),
+    "link": (800, 50, 0.75, 1, 1),
 }
+LANES_MAX = 6
+# Sud, Ouest, Nord, Est : le cadre de la requête Overpass (scripts/fetch_raw.py)
+BBOX = (46.68, -71.55, 46.97, -71.08)
+# Exceptions par identifiant de way OSM, quand une autre source contredit OSM ou le complète.
+#   inverser : sens unique à retourner ; voies : voies par sens (avant, arrière), bus comprises ;
+#   bus : voies réservées par sens ; coupe : (noeud OSM, voies) pour la partie du way au-delà de ce noeud.
+# Image : orthophotos du gouvernement du Québec (WMTS geoegl.msp.gouv.qc.ca, 0,20 m par pixel), consultées le
+# 2026-11-21. La date de prise de vue de ces tuiles n'est pas publiée (feuillage d'été). Seuls les cas nets
+# sur l'image sont inscrits.
+WAY_FIXES = {
+    # tertiary_link, 95 m, avenue de Gaulle vers rue de Nemours : le Référentiel québécois du réseau routier
+    # (version 2026-11-01) et les Voies publiques de la Ville de Québec le donnent dans le sens contraire de
+    # celui d'OSM ; l'image le confirme (voie de virage de la rue de Nemours vers l'avenue de Gaulle).
+    24445788: dict(inverser=True),
+    # autoroute Dufferin-Montmorency : 3 voies sur l'image (OSM : 2, entre deux tronçons à 3)
+    43024531: dict(voies=(3, None)),
+    # 1re Avenue : 2 voies par sens sur l'image (OSM : sans balise)
+    24445805: dict(voies=(2, 2)),
+    # boulevard Henri-Bourassa : 1 voie par sens et bandes cyclables sur l'image (OSM : sans balise)
+    25366467: dict(voies=(1, 1)),
+    # boulevard Henri-Bourassa, plus au nord : 2 voies par sens au sud, 1 par sens et bandes cyclables au nord.
+    # Sur l'image la bascule est à un carrefour, vers 58 % de la longueur : coupe au noeud OSM le plus proche.
+    41547715: dict(voies=(2, 2), coupe=(269455363, (1, 1))),
+    # boulevard de la Colline : 1 voie par sens sur l'image (OSM : sans balise)
+    27720831: dict(voies=(1, 1)),
+    # route des Rivières : losanges de voie réservée dans la voie de rive des deux sens sur l'image (OSM : sens
+    # arrière seulement). Horaire illisible sur l'image : réservée en permanence, comme l'autre sens dans OSM.
+    # Les tronçons voisins du sens avant (915182080, 40255442) n'ont pas été regardés : la voie réservée ajoutée
+    # s'arrête aux bouts de ce way.
+    40255437: dict(bus=(1, 0)),
+}
+# Voie centrale réversible du pont de Québec (minutes depuis minuit, jour de semaine). Le MTMD décrit « une voie
+# dans chaque direction et une voie centrale dont la direction varie selon l'heure de pointe », sans publier
+# l'horaire. Hypothèse : 2 voies vers Québec (nord) de 6 h à 9 h, 2 voies vers Lévis (sud) de 15 h à 18 h 30,
+# 1 voie par sens le reste du temps (aucune source claire sur l'affectation hors pointe).
+PONT_MATIN, PONT_SOIR = (360, 540), (900, 1110)
+RESERVED_MODES = ("bus", "psv", "hov", "taxi")
+NO_ACCESS = ("no", "private")
+# Voie qui ne sert qu'à tourner (ou qui se rabat) : choix de modèle, elle compte pour une demi-voie de capacité.
+TURN_ONLY = ("left", "right", "slight_left", "slight_right", "sharp_left", "sharp_right", "reverse", "merge_to_left", "merge_to_right")
+ARTERIES = ("trunk", "primary", "secondary", "tertiary")
+# Rues locales de raccord des bretelles (data/raw/connectors.json) : classe « link », 1 voie par sens,
+# capacité d'une voie tertiaire, vitesse libre en km/h.
+CONNECTOR_SPEED = 30.0
+# Arête de liaison d'un carrefour éclaté (mouvement permis) : longueur (m), vitesse (km/h) et capacité (véh/h)
+# choisies pour ne rien freiner.
+LINK_LEN, LINK_SPEED, LINK_CAP = 1.0, 100.0, 50000
+PORT_OFFSET = 0.5  # recul des ports d'un carrefour éclaté le long de leur tronçon (m)
 
 
 def road_class(hw):
+    if hw == "connector":
+        return "link"
     if hw == "motorway_link":
         return "motorway_link"
     if hw.endswith("_link"):
@@ -66,80 +119,99 @@ def parse_int(s, default):
     return int(m.group(0)) if m else default
 
 
-def build_graph():
-    ways = load("roads.json")["elements"]
-    use = defaultdict(int)
-    for w in ways:
-        for i, n in enumerate(w["nodes"]):
-            use[n] += 2 if i in (0, len(w["nodes"]) - 1) else 1
-    node_idx = {}
-    nodes = []  # [lon, lat]
-    segs = []  # géométrie partagée : liste de [lon, lat]
-    edges = []  # dict
+def drivable(t):
+    """Faux pour un tronçon fermé aux autos : privé, interdit, réservé ou en construction.
+    Les balises :conditional (fermeture saisonnière ou datée) ne ferment rien."""
+    mv, mc = t.get("motor_vehicle"), t.get("motorcar")
+    if mv in NO_ACCESS or mc in NO_ACCESS:
+        return False
+    if mv is None and mc is None and t.get("access") in NO_ACCESS:
+        return False
+    return t.get("construction") != "yes"
 
-    def nid(osm_id, pt):
-        if osm_id not in node_idx:
-            node_idx[osm_id] = len(nodes)
-            nodes.append([round(pt["lon"], 6), round(pt["lat"], 6)])
-        return node_idx[osm_id]
 
-    for w in ways:
-        t = w["tags"]
-        cls = road_class(t["highway"])
-        cap_lane, v_def, f_free, lanes_def = CLASS_PARAMS[cls]
-        ow = t.get("oneway", "")
-        oneway = ow in ("yes", "1", "true", "-1") or t["highway"].startswith("motorway") or t.get("junction") in ("roundabout", "circular")
-        if ow == "no":
-            oneway = False
-        reverse = ow == "-1"
-        lanes_total = parse_int(t.get("lanes"), 0)
-        if oneway:
-            lanes = lanes_total or lanes_def
-        else:
-            lf = parse_int(t.get("lanes:forward"), 0)
-            lanes = lf or (max(1, lanes_total // 2) if lanes_total else lanes_def)
-        lanes = max(1, min(lanes, 5))
-        lanes_back = lanes
-        if not oneway:
-            lb = parse_int(t.get("lanes:backward"), 0)
-            lanes_back = max(1, min(lb or (lanes_total - lanes if lanes_total > lanes and t.get("lanes:forward") else lanes), 5))
-        vmax = parse_int(t.get("maxspeed"), v_def)
-        if vmax < 20 or vmax > 110:
-            vmax = v_def
-        speed = round(vmax * f_free, 1)
-        ids, geom = w["nodes"], w["geometry"]
-        start = 0
-        for i in range(1, len(ids)):
-            if use[ids[i]] > 1 or i == len(ids) - 1:
-                pts = geom[start : i + 1]
-                coords = [[round(p["lon"], 6), round(p["lat"], 6)] for p in pts]
-                length = 0.0
-                for a, b in zip(coords, coords[1:]):
-                    ax, ay = xy(*a)
-                    bx, by = xy(*b)
-                    length += math.hypot(bx - ax, by - ay)
-                if length >= 1.0:
-                    a, b = nid(ids[start], geom[start]), nid(ids[i], geom[i])
-                    if a != b:
-                        sid = len(segs)
-                        segs.append(coords)
-                        base = dict(seg=sid, len=round(length, 1), speed=speed, lanes=lanes, cap=cap_lane * lanes, cls=CLASSES.index(cls), name=t.get("name") or t.get("ref") or "")
-                        if oneway:
-                            if reverse:
-                                edges.append(dict(base, a=b, b=a, rev=1))
-                            else:
-                                edges.append(dict(base, a=a, b=b, rev=0))
-                        else:
-                            edges.append(dict(base, a=a, b=b, rev=0))
-                            edges.append(dict(base, a=b, b=a, rev=1, lanes=lanes_back, cap=cap_lane * lanes_back))
-                start = i
-    # plus grande composante fortement connexe (Kosaraju itératif)
-    n = len(nodes)
+def lane_positions(value, word):
+    return {i for i, v in enumerate((value or "").split("|")) if v.strip() == word}
+
+
+def reserved_lanes(t, sfx):
+    """Voies réservées permanentes d'un sens (sfx : "" pour un sens unique, ":forward" ou ":backward").
+    Renvoie les positions interdites aux autos, les positions désignées (bus, taxi, covoiturage : une voie
+    désignée pour plusieurs modes ne compte qu'une fois) et le nombre donné par lanes:bus / lanes:psv.
+    Deux balises qui ne découpent pas la chaussée en autant de voies (l'une restée à l'ancienne largeur) ne
+    parlent pas des mêmes positions : on ne les réunit pas, on garde le découpage qui réserve le plus de voies."""
+    no = lane_positions(t.get("motor_vehicle:lanes" + sfx), "no")
+    by_width = defaultdict(set)
+    for m in RESERVED_MODES:
+        v = t.get(m + ":lanes" + sfx)
+        if v:
+            by_width[v.count("|")] |= lane_positions(v, "designated")
+    des = max(by_width.items(), key=lambda kv: (len(kv[1]), kv[0]), default=(0, set()))[1]
+    return no, des, max(parse_int(t.get("lanes:bus" + sfx), 0), parse_int(t.get("lanes:psv" + sfx), 0))
+
+
+def turn_only(t, sfx):
+    """Positions des voies exclusivement de virage d'un sens (turn:lanes) et nombre de voies que la balise découpe."""
+    v = t.get("turn:lanes" + sfx)
+    if not v:
+        return set(), 0
+    lanes = [[p.strip() for p in x.split(";")] for x in v.split("|")]
+    return {i for i, x in enumerate(lanes) if all(p in TURN_ONLY for p in x)}, len(lanes)
+
+
+def lane_count(t, sfx):
+    """Nombre de voies d'un sens d'après le découpage des balises de voies réservées (« |designated » : 2 voies) ;
+    0 si aucune de ces balises n'existe pour ce sens."""
+    vals = [t.get(k + ":lanes" + sfx) for k in ("motor_vehicle",) + RESERVED_MODES]
+    return max((v.count("|") + 1 for v in vals if v), default=0)
+
+
+def peak_spans(cond):
+    """« (Mo-Fr 06:00-09:00,15:00-18:00) » -> [(360, 540), (900, 1080)] ; None si la condition n'a pas cette forme."""
+    m = re.match(r"^\(?\s*Mo-Fr\s+(\d\d:\d\d-\d\d:\d\d(?:\s*,\s*\d\d:\d\d-\d\d:\d\d)*)\s*\)?$", cond.strip())
+    if not m:
+        return None
+    spans = []
+    for part in m.group(1).split(","):
+        h = [int(x) for x in re.findall(r"\d\d", part)]
+        spans.append((h[0] * 60 + h[1], h[2] * 60 + h[3]))
+    return spans
+
+
+def reserved_peaks(t, sfx):
+    """Voies réservées aux heures de pointe d'un sens (clés *:conditional) : {(début, fin): [positions, nombre]}.
+    None si une condition est illisible."""
+    out = {}
+    keys = ["motor_vehicle:lanes"] + [m + ":lanes" for m in RESERVED_MODES] + ["lanes:" + m for m in RESERVED_MODES]
+    for k in keys:
+        v = t.get(k + sfx + ":conditional")
+        if not v:
+            continue
+        val, _, cond = v.partition("@")
+        spans = peak_spans(cond)
+        if spans is None:
+            return None
+        for sp in spans:
+            cur = out.setdefault(sp, [set(), 0])
+            if k.startswith("lanes:"):
+                cur[1] = max(cur[1], parse_int(val.strip(), 0))
+            else:
+                cur[0] |= lane_positions(val, "no" if k.startswith("motor_vehicle") else "designated")
+    return out
+
+
+def way_km(w):
+    g = [xy(p["lon"], p["lat"]) for p in w["geometry"]]
+    return sum(math.hypot(bx - ax, by - ay) for (ax, ay), (bx, by) in zip(g, g[1:])) / 1000
+
+
+def strong_components(n, arcs):
+    """Composantes fortement connexes (Kosaraju itératif) : numéro de composante de chaque sommet et tailles."""
     out = [[] for _ in range(n)]
     inn = [[] for _ in range(n)]
-    for e in edges:
-        out[e["a"]].append(e["b"])
-        inn[e["b"]].append(e["a"])
+    for a, b in arcs:
+        out[a].append(b)
+        inn[b].append(a)
     order, seen = [], [False] * n
     for s in range(n):
         if seen[s]:
@@ -172,6 +244,324 @@ def build_graph():
                     comp[u] = c
                     stack.append(u)
         sizes.append(size)
+    return comp, sizes
+
+
+def closed_lanes(pos, count, lanes, left):
+    """Positions des `count` voies retirées d'un sens : celles que les balises situent, sinon la voie de rive."""
+    pos = set(sorted(pos)[:count])
+    for i in (range(lanes) if left else range(lanes - 1, -1, -1)):
+        if len(pos) >= count:
+            break
+        pos.add(i)
+    return pos
+
+
+def build_graph():
+    all_ways = load("roads.json")["elements"]
+    # rues locales de raccord des bretelles (liste figée de scripts/fetch_raw.py)
+    known = {w["id"] for w in all_ways}
+    all_ways += [dict(w, tags=dict(w["tags"], highway="connector")) for w in load("connectors.json")["elements"] if w["id"] not in known]
+    missing = sorted(set(WAY_FIXES) - {w["id"] for w in all_ways})
+    if missing:
+        raise SystemExit(f"exceptions sur des ways absents des données brutes : {missing}")
+    # tronçons fermés aux autos : hors du graphe
+    ways = []
+    for w in all_ways:
+        if not drivable(w["tags"]):
+            continue
+        cut = WAY_FIXES.get(w["id"], {}).get("coupe")
+        if cut:  # deux parties, coupées au noeud donné
+            k = w["nodes"].index(cut[0])
+            ways.append(dict(w, nodes=w["nodes"][: k + 1], geometry=w["geometry"][: k + 1]))
+            ways.append(dict(w, nodes=w["nodes"][k:], geometry=w["geometry"][k:], part=1))
+        else:
+            ways.append(w)
+    closed = [w for w in all_ways if not drivable(w["tags"])]
+    print(f"tronçons fermés aux autos (privés, interdits, réservés, en construction) : {len(closed)} ways, {sum(map(way_km, closed)):.1f} km")
+    use = defaultdict(int)
+    for w in ways:
+        for i, n in enumerate(w["nodes"]):
+            use[n] += 2 if i in (0, len(w["nodes"]) - 1) else 1
+    node_idx = {}
+    nodes = []  # [lon, lat]
+    segs = []  # géométrie partagée : liste de [lon, lat]
+    edges = []  # dict
+
+    def nid(osm_id, pt):
+        if osm_id not in node_idx:
+            node_idx[osm_id] = len(nodes)
+            nodes.append([round(pt["lon"], 6), round(pt["lat"], 6)])
+        return node_idx[osm_id]
+
+    # --- voies par sens lues sur les balises (None : inconnu) ---
+    info = []
+    for w in ways:
+        t = w["tags"]
+        fix = WAY_FIXES.get(w["id"], {})
+        conn = t["highway"] == "connector"
+        ow = t.get("oneway", "")
+        oneway = ow in ("yes", "1", "true", "-1") or t["highway"].startswith("motorway") or t.get("junction") in ("roundabout", "circular")
+        if ow == "no":
+            oneway = False
+        reverse = ow == "-1"
+        if fix.get("inverser"):
+            if not oneway:
+                raise SystemExit(f"way {w['id']} : exception « inverser » sur un tronçon qui n'est pas à sens unique")
+            reverse = not reverse
+        alternating = ow == "alternating" and not conn  # une seule voie pour les deux sens
+        total = parse_int(t.get("lanes"), 0)
+        lf, lb, both = (parse_int(t.get("lanes:" + k), 0) for k in ("forward", "backward", "both_ways"))
+        fwd = back = None
+        half = False
+        src = "balise"
+        if conn:
+            fwd, back, src = 1, None if oneway else 1, "raccord"
+        elif alternating:
+            fwd = back = 1
+        elif oneway:
+            # lanes peut compter les voies de l'autre sens et la voie centrale : on ne garde que celles du sens du way
+            if lf:
+                fwd = lf
+            elif total:
+                fwd = max(1, total - lb - both)
+        else:
+            # la voie centrale (lanes:both_ways) ne sert à aucun des deux sens ; total impair sans détail : arrondi vers le bas
+            tot = max(0, total - both)
+            if not lf and not lb:  # ni lanes:forward ni lanes:backward : le découpage des voies réservées d'un sens en tient lieu
+                lf, lb = lane_count(t, ":forward"), lane_count(t, ":backward")
+            # 3 ou 5 voies sans détail : on ignore quel sens a la voie de plus, chacun en reçoit la moitié en capacité
+            half = not lf and not lb and tot >= 3 and tot % 2 == 1
+            fwd = lf or ((max(1, tot - lb) if lb else max(1, tot // 2)) if total else None)
+            back = lb or ((max(1, tot - lf) if lf else max(1, tot // 2)) if total else None)
+        seen = fix.get("coupe", (0, None))[1] if w.get("part") else fix.get("voies")
+        if seen:  # compté sur l'image : l'emporte sur les balises
+            if (seen[1] is None) != oneway:
+                raise SystemExit(f"way {w['id']} : exception « voies » qui ne correspond pas au statut du tronçon")
+            fwd, back, half, src = seen[0], seen[1], False, "image"
+        info.append(dict(oneway=oneway, reverse=reverse, alt=alternating, fwd=fwd, back=back, half=half, conn=conn, km=way_km(w), src=src))
+
+    # --- tronçons sans nombre de voies : héritage du voisin de même nom et de même statut, de proche en proche ---
+    def unknown(k):
+        return info[k]["fwd"] is None or (not info[k]["oneway"] and info[k]["back"] is None)
+
+    at_end = defaultdict(list)
+    for k, w in enumerate(ways):
+        for n in {w["nodes"][0], w["nodes"][-1]}:
+            at_end[n].append(k)
+    todo = [k for k in range(len(ways)) if unknown(k)]
+    while todo:
+        found = {}
+        for k in todo:
+            w, name = ways[k], ways[k]["tags"].get("name")
+            if not name:
+                continue
+            vals = []
+            for n in {w["nodes"][0], w["nodes"][-1]}:
+                for j in at_end[n]:
+                    x = ways[j]
+                    if j == k or unknown(j) or info[j]["alt"] or info[j]["conn"] or info[j]["oneway"] != info[k]["oneway"] or x["tags"].get("name") != name:
+                        continue
+                    # deux ways tracés tête-bêche : l'avant de l'un est l'arrière de l'autre
+                    same = (w["nodes"][0] == n and x["nodes"][-1] == n) or (w["nodes"][-1] == n and x["nodes"][0] == n)
+                    vals.append((info[j]["fwd"], info[j]["back"]) if same or info[k]["oneway"] else (info[j]["back"], info[j]["fwd"]))
+            if vals:  # voisins en désaccord : le plus petit
+                found[k] = (min(v[0] for v in vals), None if info[k]["oneway"] else min(v[1] for v in vals))
+        if not found:
+            break
+        for k, (f, b) in found.items():
+            if info[k]["fwd"] is None:
+                info[k]["fwd"] = f
+            if not info[k]["oneway"] and info[k]["back"] is None:
+                info[k]["back"] = b
+            info[k]["src"] = "héritage"
+        todo = [k for k in todo if k not in found]
+    for k in todo:  # sinon valeur par défaut selon la classe et le statut
+        d = CLASS_PARAMS[road_class(ways[k]["tags"]["highway"])][3 if info[k]["oneway"] else 4]
+        if info[k]["fwd"] is None:
+            info[k]["fwd"] = d
+        if not info[k]["oneway"] and info[k]["back"] is None:
+            info[k]["back"] = d
+        info[k]["src"] = "défaut"
+    by_src = defaultdict(lambda: [0, 0.0])
+    for i in info:
+        by_src[i["src"]][0] += 1
+        by_src[i["src"]][1] += i["km"]
+    print("nombre de voies : " + " ; ".join(f"{s} {by_src[s][0]} ways, {by_src[s][1]:.1f} km" for s in ("balise", "image", "héritage", "défaut", "raccord")))
+    halves = [k for k, i in enumerate(info) if i["half"]]
+    print(f"double sens à nombre impair de voies sans détail (la voie de plus partagée entre les deux sens) : {len(halves)} ways, {sum(info[k]['km'] for k in halves):.1f} km")
+
+    # --- vitesse sans balise maxspeed : celle du voisin de même nom et de même classe, de proche en proche (défaut de
+    # la classe sinon). Une limite sous 30 km/h est un aménagement local (rue partagée) : elle ne se propage pas. ---
+    vmax_of = [None if i["conn"] else parse_int(w["tags"].get("maxspeed"), None) for w, i in zip(ways, info)]
+    v_src = ["raccord" if i["conn"] else "défaut" if v is None else "balise" for v, i in zip(vmax_of, info)]
+    todo = [k for k, v in enumerate(vmax_of) if v is None and not info[k]["conn"] and ways[k]["tags"].get("name")]
+    while todo:
+        found = {}
+        for k in todo:
+            w, t = ways[k], ways[k]["tags"]
+            vals = [vmax_of[j] for n in {w["nodes"][0], w["nodes"][-1]} for j in at_end[n]
+                    if j != k and (vmax_of[j] or 0) >= 30 and ways[j]["tags"].get("name") == t["name"] and ways[j]["tags"]["highway"] == t["highway"]]
+            if vals:  # voisins en désaccord : la plus basse
+                found[k] = min(vals)
+        if not found:
+            break
+        for k, v in found.items():
+            vmax_of[k], v_src[k] = v, "héritage"
+        todo = [k for k in todo if k not in found]
+    by_src = defaultdict(lambda: [0, 0.0])
+    for s, i in zip(v_src, info):
+        by_src[s][0] += 1
+        by_src[s][1] += i["km"]
+    moved = sum(i["km"] for w, i, v, s in zip(ways, info, vmax_of, v_src) if s == "héritage" and v != CLASS_PARAMS[road_class(w["tags"]["highway"])][1])
+    print("vitesse : " + " ; ".join(f"{s} {by_src[s][0]} ways, {by_src[s][1]:.1f} km" for s in ("balise", "héritage", "défaut", "raccord"))
+          + f" ; héritage différent du défaut de la classe : {moved:.1f} km")
+
+    skipped = set()  # voies réservées de pointe non appliquées
+    turning = [set(), 0.0, 0.0, set()]  # voies de virage : ways, km de sens, voie-km retirés, ways au découpage incohérent
+    for w, inf, vmax in zip(ways, info, vmax_of):
+        t = w["tags"]
+        fix = WAY_FIXES.get(w["id"], {})
+        cls = road_class(t["highway"])
+        cap_lane, v_def, f_free = CLASS_PARAMS[cls][:3]
+        oneway, reverse = inf["oneway"], inf["reverse"]
+        half = 0.5 if inf["half"] else 0
+        # --- par sens : (voies ouvertes aux autos, voies réservées retirées, capacité, [(capacité, début, fin)]) ---
+        dirs = [("", inf["fwd"])] if oneway else [(":forward", inf["fwd"]), (":backward", inf["back"])]
+        per_dir = []
+        if inf["conn"]:
+            per_dir = [(1, 0, CLASS_PARAMS["tertiary"][0], [])] * len(dirs)
+        elif inf["alt"]:
+            per_dir = [(1, 0, cap_lane // 2, [])] * 2  # circulation alternée : chaque sens a la voie la moitié du temps
+        else:
+            cond = {sfx: reserved_peaks(t, sfx) for sfx, _ in dirs}
+            if not oneway:
+                # clé de pointe sans suffixe sur un double sens : elle vaut pour le sens que désignent les balises
+                # permanentes du même way (bus:lanes:backward, etc.) ; indécidable sinon
+                loose = reserved_peaks(t, "")
+                if loose is None or loose:
+                    sides = [sfx for sfx, _ in dirs if any(reserved_lanes(t, sfx))]
+                    if loose and len(sides) == 1 and not cond[sides[0]]:
+                        cond[sides[0]] = loose
+                    else:
+                        skipped.add(w["id"])
+            elif cond[""] and not any(p for p, _ in cond[""].values()) and not any(reserved_lanes(t, "")) and any(reserved_lanes(t, ":backward")):
+                # sens unique dont les balises situent la voie de pointe dans l'autre sens, absent de ce way. Boulevard
+                # Guillaume-Couture : ces ways sont la chaussée vers l'est du boulevard dédoublé et gardent les balises
+                # de l'ancien tracé à double sens ; la voie de pointe (sens arrière) est sur la chaussée opposée, qui
+                # porte ses propres balises. Rien à retirer ici.
+                cond[""] = {}
+                skipped.add(w["id"])
+            for k, (sfx, lanes) in enumerate(dirs):
+                lanes = max(1, min(lanes, LANES_MAX))
+                no, des, count = reserved_lanes(t, sfx)
+                side = ("busway:right", "busway:left") if oneway else (("busway:right",), ("busway:left",))[k]
+                if any(t.get(b) == "lane" for b in side):
+                    count = max(count, 1)
+                count = max(count, fix.get("bus", (0, 0))[k])
+                c = cond[sfx]
+                if c is None:
+                    skipped.add(w["id"])
+                    c = {}
+                kept = set()
+                if c:
+                    # une voie réservée seulement en pointe reste ouverte le reste du temps : les balises
+                    # permanentes du même way qui la décrivent servent à la situer, pas à la retirer
+                    in_peak = set().union(*(p for p, _ in c.values()))
+                    loose_count = 0 if in_peak else max(num for _, num in c.values())  # pointe donnée en nombre de voies, sans position
+                    # exception : une voie que motor_vehicle:lanes ferme aux autos sans condition reste retirée, même si
+                    # les balises de pointe la répètent (autoroute Robert-Bourassa : la voie réservée y prolonge celle,
+                    # permanente, des tronçons voisins)
+                    kept = no & in_peak
+                    if count:
+                        # exception : une voie que busway ou lanes:bus disent réservée et que les balises de pointe
+                        # ferment aux autres modes réservés (« no ») n'est pas la voie de pointe, elle reste retirée
+                        shut = [lane_positions((t.get(m + ":lanes" + sfx + ":conditional") or "").partition("@")[0], "no") for m in RESERVED_MODES]
+                        kept |= des & in_peak & set().union(*shut)
+                    gone = (no | des) - (in_peak - kept)
+                    r = max(0, max(len(no - (in_peak - kept)), len(des - (in_peak - kept))) - loose_count)
+                else:
+                    gone = no | des
+                    r = max(len(no), len(des), count)
+                open_lanes = max(1, lanes - r)
+                # Voies exclusivement de virage des artères (turn:lanes) : chacune compte pour une demi-voie de capacité,
+                # edges.lanes ne change pas. Une voie déjà retirée comme réservée n'est pas comptée une seconde fois ;
+                # rien si toutes les voies tournent ou si la balise ne découpe pas la chaussée en autant de voies.
+                turn, cut = turn_only(t, sfx) if cls in ARTERIES else (set(), 0)
+                if turn and cut != lanes:
+                    turn = set()
+                    turning[3].add(w["id"])
+                left = oneway and t.get("busway:left") == "lane"
+                gone = closed_lanes(gone, lanes - open_lanes, lanes, left)
+
+                def cap_of(n, shut_lanes):
+                    k_turn = len(turn - shut_lanes)
+                    return round(cap_lane * (n + half - (0.5 * k_turn if k_turn < n else 0)))
+
+                cap = cap_of(open_lanes, gone)
+                if cap < cap_lane * (open_lanes + half):
+                    turning[0].add(w["id"])
+                    turning[1] += inf["km"]
+                    turning[2] += inf["km"] * (open_lanes + half - cap / cap_lane)
+                peaks = []
+                for (start, end), (pos, num) in sorted(c.items()):
+                    peak_lanes = max(1, open_lanes - max(len(pos - kept), num))
+                    if peak_lanes < open_lanes:
+                        peaks.append((cap_of(peak_lanes, closed_lanes(gone | (pos - kept), lanes - peak_lanes, lanes, left)), start, end))
+                per_dir.append((open_lanes, lanes - open_lanes, cap, peaks))
+            if not oneway and "lanes:both_ways" in t and "turn:lanes:both_ways" not in t and "reversible" in (t.get("note") or "").lower():
+                # voie centrale réversible (pont de Québec) : une voie de plus vers le nord le matin, vers le sud le soir
+                north = 0 if w["geometry"][-1]["lat"] > w["geometry"][0]["lat"] else 1
+                for k, span in ((north, PONT_MATIN), (1 - north, PONT_SOIR)):
+                    o, r, cap, peaks = per_dir[k]
+                    per_dir[k] = (o, r, cap, sorted(peaks + [(cap + cap_lane,) + span], key=lambda p: p[1]))
+        for _, _, _, peaks in per_dir:
+            assert all(a[2] <= b[1] for a, b in zip(peaks, peaks[1:])), (w["id"], peaks)
+        # --- vitesse ---
+        if inf["conn"]:
+            speed = CONNECTOR_SPEED
+        else:
+            if vmax is None:
+                vmax = v_def
+            if vmax < 20:
+                vmax = 20
+            elif vmax > 110:
+                vmax = v_def
+            adv = t.get("maxspeed:advisory") or ""
+            if adv.isdigit():  # vitesse conseillée (courbes des bretelles) : on roule un peu au-dessus
+                vmax = min(vmax, int(adv) + 10)
+            speed = round(vmax * f_free, 1)
+        ids, geom = w["nodes"], w["geometry"]
+        start = 0
+        for i in range(1, len(ids)):
+            if use[ids[i]] > 1 or i == len(ids) - 1:
+                pts = geom[start : i + 1]
+                coords = [[round(p["lon"], 6), round(p["lat"], 6)] for p in pts]
+                length = 0.0
+                for a, b in zip(coords, coords[1:]):
+                    ax, ay = xy(*a)
+                    bx, by = xy(*b)
+                    length += math.hypot(bx - ax, by - ay)
+                if length >= 1.0:
+                    a, b = nid(ids[start], geom[start]), nid(ids[i], geom[i])
+                    if a != b:
+                        sid = len(segs)
+                        segs.append(coords)
+                        base = dict(seg=sid, len=round(length, 1), speed=speed, cls=CLASSES.index(cls), name=t.get("name") or t.get("ref") or "", way=w["id"])
+                        for k, (lanes, bus, cap, peaks) in enumerate(per_dir):
+                            if (k == 1) != (oneway and reverse):
+                                edges.append(dict(base, a=b, b=a, rev=1, lanes=lanes, bus=bus, cap=cap, peaks=peaks))
+                            else:
+                                edges.append(dict(base, a=a, b=b, rev=0, lanes=lanes, bus=bus, cap=cap, peaks=peaks))
+                start = i
+    if skipped:
+        print(f"voies réservées de pointe non appliquées (sens indécidable ou absent du way) : {len(skipped)} ways {sorted(skipped)}")
+    print(f"voies exclusivement de virage (demi-voie de capacité) : {len(turning[0])} ways, {turning[1]:.1f} km de sens, {turning[2]:.1f} voie-km de capacité retirés ; "
+          f"balise turn:lanes au découpage différent du nombre de voies, ignorée : {len(turning[3])} ways")
+    sinks = add_turnarounds(nodes, segs, edges)
+    # plus grande composante fortement connexe
+    n = len(nodes)
+    comp, sizes = strong_components(n, [(e["a"], e["b"]) for e in edges])
     best = max(range(len(sizes)), key=lambda c: sizes[c])
     keep = [comp[i] == best for i in range(n)]
     remap, new_nodes = {}, []
@@ -186,8 +576,215 @@ def build_graph():
                 seg_map[e["seg"]] = len(new_segs)
                 new_segs.append(segs[e["seg"]])
             new_edges.append(dict(e, a=remap[e["a"]], b=remap[e["b"]], seg=seg_map[e["seg"]]))
-    print(f"graphe : {len(new_nodes)} noeuds, {len(new_edges)} arêtes, {len(new_segs)} segments (composante principale {sizes[best]}/{n})")
-    return new_nodes, new_segs, new_edges
+    lost = {w["id"] for w in ways if w["tags"]["highway"].endswith("_link")} - {e["way"] for e in new_edges}
+    print(f"composante principale : {sizes[best]}/{n} noeuds ; bretelles restées hors de la composante : {len(lost)} ways")
+    ends = {remap[s] for s in sinks if s in remap}
+    turns_off, ports = split_turns(new_nodes, new_segs, new_edges, {osm: remap[i] for osm, i in node_idx.items() if i in remap})
+    assert not ends & ports
+    print(f"graphe : {len(new_nodes)} noeuds, {len(new_edges)} arêtes, {len(new_segs)} segments")
+    connectors = {w["id"] for w in all_ways if w["tags"]["highway"] == "connector"}
+    return new_nodes, new_segs, new_edges, dict(ends=ends, ports=ports, turns_off=turns_off, connectors=connectors)
+
+
+def split_turns(nodes, segs, edges, osm_node):
+    """Interdictions de virage d'OpenStreetMap (relations « restriction » à noeud via), sans rien demander au moteur :
+    le carrefour est éclaté en un port d'entrée par arête entrante et un port de sortie par arête sortante, reliés
+    par une courte arête de liaison pour chaque mouvement permis. no_* interdit un mouvement, only_* interdit tous
+    les autres mouvements depuis le même tronçon. Sont ignorées : les restrictions à via way, conditionnelles ou
+    visant d'autres véhicules, et le demi-tour sur place, qu'un plus court chemin ne fait pas.
+    Renvoie les paires [arête entrante, arête sortante] interdites et l'ensemble des ports."""
+    into, outof, by_way = defaultdict(list), defaultdict(list), defaultdict(list)
+    for i, e in enumerate(edges):
+        into[e["b"]].append(i)
+        outof[e["a"]].append(i)
+        by_way[e["way"]].append(i)
+    why = defaultdict(int)
+    todo = []  # (relation, noeud, paires interdites)
+    rels = [r for r in load("restrictions.json")["elements"] if r["type"] == "relation"]
+    for r in rels:
+        t = r.get("tags", {})
+        kind = t.get("restriction")
+        if kind is None or "@" in kind:
+            why["conditionnelle" if kind or "restriction:conditional" in t else "autre véhicule"] += 1
+            continue
+        mem = defaultdict(list)
+        for m in r["members"]:
+            mem[m["role"], m["type"]].append(m["ref"])
+        frm, to, via = mem["from", "way"], mem["to", "way"], mem["via", "node"]
+        verb = kind.split("_")[0]
+        if mem["via", "way"]:
+            why["via way"] += 1
+        elif verb not in ("no", "only") or len(via) != 1 or not frm or not to or (verb == "only" and len(frm) + len(to) != 2):
+            why["mal formée"] += 1
+        elif via[0] not in osm_node or any(x not in by_way for x in frm + to):
+            why["hors du graphe"] += 1
+        else:
+            v = osm_node[via[0]]
+            ins = [[i for i in by_way[x] if edges[i]["b"] == v] for x in frm]
+            outs = [[o for o in by_way[x] if edges[o]["a"] == v] for x in to]
+            if any(len(x) > 1 for x in ins + outs):
+                why["ambiguë (tronçon non coupé au noeud via)"] += 1
+            elif not all(ins + outs):
+                why["sans objet (sens de circulation)"] += 1
+            else:
+                if verb == "no":
+                    pairs = {(i[0], o[0]) for i in ins for o in outs}
+                else:
+                    pairs = {(ins[0][0], o) for o in outof[v] if o != outs[0][0]}
+                if all(edges[i]["seg"] == edges[o]["seg"] for i, o in pairs):
+                    why["demi-tour sur place" if pairs else "sans objet (aucun autre mouvement)"] += 1
+                else:
+                    todo.append((r["id"], v, pairs))
+
+    # une interdiction qui casserait la connexité forte n'est pas appliquée (graphe des mouvements entre arêtes)
+    def cut_off(rules):  # noeuds touchés par une arête coupée du reste quand ces interdictions s'appliquent
+        off = set().union(*(p for _, _, p in rules))
+        comp, sizes = strong_components(len(edges), [(i, o) for v in list(outof) for i in into[v] for o in outof[v] if (i, o) not in off])
+        best = max(range(len(sizes)), key=lambda c: sizes[c])
+        return {edges[i][k] for i in range(len(edges)) if comp[i] != best for k in "ab"}
+
+    dropped = []
+    while True:
+        bad = cut_off(todo)
+        if not bad:
+            break
+        drop = [x for x in todo if x[1] in bad]
+        if not drop:
+            raise SystemExit("graphe des mouvements non connexe sans qu'une interdiction de virage soit en cause")
+        dropped += drop
+        todo = [x for x in todo if x[1] not in bad]
+    for x in sorted(dropped):  # à un même carrefour, seules celles qui cassent vraiment la connexité restent écartées
+        if not cut_off(todo + [x]):
+            todo.append(x)
+    dropped = [x for x in dropped if x not in todo]
+    todo.sort()
+
+    def dist(p, q):
+        (ax, ay), (bx, by) = xy(*p), xy(*q)
+        return math.hypot(bx - ax, by - ay)
+
+    def port(s, first):
+        """Recule de PORT_OFFSET (au plus le tiers du segment) le bout du segment s et renvoie ses nouvelles coordonnées."""
+        c = segs[s] if first else segs[s][::-1]
+        d = [dist(a, b) for a, b in zip(c, c[1:])]
+        off, k = min(PORT_OFFSET, sum(d) / 3), 0
+        while d[k] < off:
+            off -= d[k]
+            k += 1
+        f = off / d[k]
+        p = [round(c[k][0] + f * (c[k + 1][0] - c[k][0]), 6), round(c[k][1] + f * (c[k + 1][1] - c[k][1]), 6)]
+        c = [p] + c[k + 1:]
+        segs[s] = c if first else c[::-1]
+        return p
+
+    by_node = defaultdict(set)
+    for _, v, pairs in todo:
+        by_node[v] |= pairs
+    turns_off, ports, n0, e0 = [], set(), len(nodes), len(edges)
+    for v in sorted(by_node):
+        # le bout d'un segment à double sens sert de port d'entrée à un sens et de port de sortie à l'autre
+        at = {}
+        for i in into[v] + outof[v]:
+            e = edges[i]
+            if e["seg"] not in at:
+                at[e["seg"]] = port(e["seg"], (e["a"] == v) == (e["rev"] == 0))
+        p_in, p_out = {}, {}
+        for k, i in enumerate(into[v]):  # le noeud d'origine devient le premier port d'entrée
+            p_in[i] = v if k == 0 else len(nodes)
+            if k == 0:
+                nodes[v] = list(at[edges[i]["seg"]])
+            else:
+                nodes.append(list(at[edges[i]["seg"]]))
+        for o in outof[v]:
+            p_out[o] = len(nodes)
+            nodes.append(list(at[edges[o]["seg"]]))
+        for i in into[v]:
+            edges[i]["b"] = p_in[i]
+        for o in outof[v]:
+            edges[o]["a"] = p_out[o]
+        ports.update(p_in.values(), p_out.values())
+        for i in into[v]:
+            for o in outof[v]:
+                if (i, o) in by_node[v]:
+                    turns_off.append([i, o])
+                else:
+                    segs.append([list(nodes[p_in[i]]), list(nodes[p_out[o]])])
+                    edges.append(dict(seg=len(segs) - 1, len=LINK_LEN, speed=LINK_SPEED, cls=CLASSES.index("link"), name="", way=0,
+                                      a=p_in[i], b=p_out[o], rev=0, lanes=1, bus=0, cap=LINK_CAP, peaks=[]))
+    # contrôles : connexité forte du graphe éclaté, aucun mouvement interdit resté possible
+    comp, sizes = strong_components(len(nodes), [(e["a"], e["b"]) for e in edges])
+    if len(sizes) != 1:
+        raise SystemExit(f"graphe éclaté non fortement connexe : {len(sizes)} composantes")
+    after = defaultdict(set)
+    for e in edges:
+        after[e["a"]].add(e["b"])
+    for i, o in turns_off:
+        assert edges[o]["a"] not in after[edges[i]["b"]] and edges[o]["a"] != edges[i]["b"], (i, o)
+    print(f"interdictions de virage : {len(rels)} relations, {len(todo)} appliquées ({len(turns_off)} mouvements interdits à {len(by_node)} carrefours), "
+          f"{len(dropped)} écartées car elles cassent la connexité {sorted(x[0] for x in dropped)}")
+    print("  ignorées : " + " ; ".join(f"{k} {n}" for k, n in sorted(why.items(), key=lambda kv: -kv[1])))
+    print(f"  carrefours éclatés : {len(nodes) - n0} noeuds et {len(edges) - e0} arêtes de liaison ajoutés")
+    return turns_off, ports
+
+
+def add_turnarounds(nodes, segs, edges):
+    """Les routes coupées par le cadre de la zone finissent en cul-de-sac à sens unique, que le filtre de
+    connexité retirerait en entier. On relie chaque bout sans sortie au bout sans entrée le plus proche
+    (la chaussée opposée) par une courte arête de retournement, de même gabarit que ces chaussées. Quand la chaussée opposée commence plus loin
+    que 400 m, on la coupe à son point le plus proche du bout sans sortie et on y raccorde le retournement.
+    Renvoie les bouts sans sortie raccordés."""
+    south, west, north, east = BBOX
+    indeg, outdeg, seg_use = [0] * len(nodes), [0] * len(nodes), defaultdict(int)
+    for e in edges:
+        outdeg[e["a"]] += 1
+        indeg[e["b"]] += 1
+        seg_use[e["seg"]] += 1
+
+    def at_frame(i):
+        # Hors de la zone ou à moins de 250 m de son cadre. Overpass rend les ways entiers : une route coupée finit
+        # dehors. Plus loin à l'intérieur, un bout sans sortie est une bretelle vers une rue locale ou une halte.
+        lon, lat = nodes[i]
+        if lat < south or lat > north or lon < west or lon > east:
+            return True
+        return min((lat - south) * KY, (north - lat) * KY, (lon - west) * KX, (east - lon) * KX) < 250
+
+    def dist(p, q):
+        (ax, ay), (bx, by) = xy(*p), xy(*q)
+        return math.hypot(bx - ax, by - ay)
+
+    ends = [i for i in range(len(nodes)) if at_frame(i)]
+    sinks = [i for i in ends if outdeg[i] == 0 and indeg[i] > 0]
+    sources = [i for i in ends if indeg[i] == 0 and outdeg[i] > 0]
+    first = [e for e in edges if e["a"] in set(sources) and e["rev"] == 0 and seg_use[e["seg"]] == 1]  # départs des chaussées entrantes
+    added, cut, alone, done = 0, 0, [], []
+    for s in sinks:
+        d, q = min(((dist(nodes[s], nodes[q]), q) for q in sources), default=(1e9, -1))
+        if d >= 400:
+            d, e, j = min(((dist(nodes[s], p), k, j) for k, e in enumerate(first) for j, p in enumerate(segs[e["seg"]][1:-1], 1)), default=(1e9, -1, -1))
+            if d >= 400:
+                alone.append(s)
+                continue
+            # le début de la chaussée entrante, au-delà du point de retournement, est abandonné
+            e = first[e]
+            q = len(nodes)
+            segs[e["seg"]] = segs[e["seg"]][j:]
+            nodes.append(list(segs[e["seg"]][0]))
+            e["a"] = q
+            e["len"] = round(sum(dist(a, b) for a, b in zip(segs[e["seg"]], segs[e["seg"]][1:])), 1)
+            cut += 1
+        segs.append([list(nodes[s]), list(nodes[q])])
+        # le retournement prolonge la route au-delà du cadre : il ne doit pas l'étrangler. Il prend la classe, la
+        # vitesse, les voies et la capacité de la plus étroite des deux chaussées qu'il raccorde.
+        ends_cap = [max((e for e in edges if e[k] == n), key=lambda e: e["cap"]) for k, n in (("b", s), ("a", q))]
+        m = min(ends_cap, key=lambda e: e["cap"])
+        edges.append(dict(seg=len(segs) - 1, len=round(max(d, 1.0), 1), speed=m["speed"], cls=m["cls"], name="", way=0,
+                          a=s, b=q, rev=0, lanes=m["lanes"], bus=0, cap=m["cap"], peaks=[]))
+        added += 1
+        done.append(s)
+    print(f"bords de la zone : {len(sinks)} bouts sans sortie, {len(sources)} bouts sans entrée, {added} arêtes de retournement (dont {cut} sur une chaussée opposée coupée)")
+    for s in alone:
+        print(f"  bout sans sortie resté seul (rien à moins de 400 m) : ({nodes[s][1]:.4f}, {nodes[s][0]:.4f})")
+    return done
 
 
 # ----------------------------------------------------------------------------
@@ -378,11 +975,13 @@ POLES = [
     ("IUCPQ – Plaza Laval", 46.7785, -71.2990, 5500), ("Sainte-Foy Ouest – Marly", 46.7570, -71.3300, 4100),
 ]
 # Portes d'entrée du territoire modélisé (zones externes) : nom, lat, lon, {zone: poids}
+# Une porte s'accroche au bout de sa route, là où elle sort de la zone (bout sans sortie portant un retournement,
+# à moins de 5 km), sinon au noeud autoroutier le plus proche.
 GATES = [
     ("A-73 Nord (Stoneham)", 46.966, -71.335, {9: 0.35, 11: 0.15}), ("A-40 / R-138 Est (Côte-de-Beaupré)", 46.895, -71.090, {9: 0.30}),
     ("A-573 / R-369 (Shannon, Val-Cartier)", 46.900, -71.460, {9: 0.15}), ("A-40 Ouest (Portneuf)", 46.745, -71.545, {9: 0.20, 11: 0.25}),
-    ("A-73 Sud (Beauce)", 46.684, -71.262, {10: 0.50, 11: 0.10}), ("A-20 Est (Bellechasse)", 46.775, -71.085, {10: 0.25, 11: 0.20}),
-    ("A-20 Ouest (Lotbinière)", 46.713, -71.300, {10: 0.25, 11: 0.30}),
+    ("A-73 Sud (Beauce)", 46.684, -71.262, {10: 0.50, 11: 0.10}), ("A-20 Est (Bellechasse)", 46.813, -71.066, {10: 0.25, 11: 0.20}),
+    ("A-20 Ouest (Lotbinière)", 46.680, -71.340, {10: 0.25, 11: 0.30}),
 ]
 
 
@@ -448,19 +1047,29 @@ def build_zoning():
     return zone_of, outlines
 
 
-def build_demand(nodes, edges, zone_of):
+def build_demand(nodes, edges, zone_of, ends, ports, connectors):
     # noeuds « de rue » : au moins une arête non autoroutière
     street = set()
     fast = set()
+    real, raccord = set(), set()  # noeuds d'une vraie rue (hors classe « link »), noeuds d'une rue de raccord
     for e in edges:
         if e["cls"] in (2, 3, 4, 6):
             street.update((e["a"], e["b"]))
+        if e["cls"] in (2, 3, 4):
+            real.update((e["a"], e["b"]))
+        if e["way"] in connectors:
+            raccord.update((e["a"], e["b"]))
         if e["cls"] in (0, 1):
             fast.update((e["a"], e["b"]))
     for e in edges:
         if e["cls"] not in (0, 1):  # exclut les extrémités de bretelles et les carrefours
             fast.discard(e["a"])
             fast.discard(e["b"])
+    # rien ne s'accroche à un port de carrefour éclaté : tous les mouvements n'y sont pas permis
+    street -= ports
+    fast -= ports
+    # ni à une rue de raccord (30 km/h, une voie), sauf là où elle rejoint une vraie rue
+    street -= raccord - real
     g_street, g_fast = Grid(400), Grid(400)
     for i, (lon, lat) in enumerate(nodes):
         x, y = xy(lon, lat)
@@ -536,12 +1145,13 @@ def build_demand(nodes, edges, zone_of):
             if (nlat < river_lat(nlon)) != south:
                 continue
             d2 = (it[0] - x) ** 2 + (it[1] - y) ** 2
-            if best is None or d2 < best[0]:
-                best = (d2, it[2])
+            key = (it[2] not in ends or d2 > 5000 ** 2, d2)
+            if best is None or key < best[0]:
+                best = (key, it[2])
         if best is None:
             raise SystemExit("porte sans noeud autoroutier : " + name)
         node = best[1]
-        print(f"  porte {name[:34]:34s} -> ({nodes[node][1]:.4f}, {nodes[node][0]:.4f}) à {best[0] ** 0.5 / 1000:.1f} km")
+        print(f"  porte {name[:34]:34s} -> ({nodes[node][1]:.4f}, {nodes[node][0]:.4f}) à {best[0][1] ** 0.5 / 1000:.1f} km{'' if best[0][0] else ', bout de route'}")
         gates_out.append(dict(name=name, node=node, lon=nodes[node][0], lat=nodes[node][1], zones=zw))
     out = sorted(pts.values(), key=lambda p: p["node"])
     for p in out:
@@ -667,7 +1277,7 @@ def build_counts(nodes, segs, edges):
 
 
 # Décodeur placé à la fin de web/data/network.js : il remet window.TQ_DATA exactement comme data/network.json.
-DECODER = """(function(D){var q=D.nodes,N=[],x=0,y=0,i;for(i=0;i<q.length;i+=2){x+=q[i];y+=q[i+1];N.push([x/1e6,y/1e6]);}D.nodes=N;var e=D.edges;function u(a){for(var i=1;i<a.length;i++)a[i]+=a[i-1];}u(e.a);u(e.seg);u(e.name);for(i=0;i<e.b.length;i++)e.b[i]+=e.a[i];["rev","cor","lanes","cls"].forEach(function(k){e[k]=Array.from(e[k],Number);});var n=D.segs.n,d=D.segs.d,S=new Array(n.length),A=new Array(n.length),B=new Array(n.length),k=0,s;for(i=e.a.length-1;i>=0;i--){s=e.seg[i];A[s]=e.rev[i]?e.b[i]:e.a[i];B[s]=e.rev[i]?e.a[i]:e.b[i];}for(s=0;s<n.length;s++){var a=N[A[s]],b=N[B[s]],c=[[a[0],a[1]]];x=Math.round(a[0]*1e6);y=Math.round(a[1]*1e6);for(i=0;i<n[s];i++){x+=d[k++];y+=d[k++];c.push([x/1e6,y/1e6]);}c.push([b[0],b[1]]);S[s]=c;}D.segs=S;})(window.TQ_DATA);"""
+DECODER = """(function(D){var q=D.nodes,N=[],x=0,y=0,i;for(i=0;i<q.length;i+=2){x+=q[i];y+=q[i+1];N.push([x/1e6,y/1e6]);}D.nodes=N;var e=D.edges;function u(a){for(var i=1;i<a.length;i++)a[i]+=a[i-1];}u(e.a);u(e.seg);u(e.name);for(i=0;i<e.b.length;i++)e.b[i]+=e.a[i];["rev","cor","lanes","bus","cls"].forEach(function(k){e[k]=Array.from(e[k],Number);});var n=D.segs.n,d=D.segs.d,S=new Array(n.length),A=new Array(n.length),B=new Array(n.length),k=0,s;for(i=e.a.length-1;i>=0;i--){s=e.seg[i];A[s]=e.rev[i]?e.b[i]:e.a[i];B[s]=e.rev[i]?e.a[i]:e.b[i];}for(s=0;s<n.length;s++){var a=N[A[s]],b=N[B[s]],c=[[a[0],a[1]]];x=Math.round(a[0]*1e6);y=Math.round(a[1]*1e6);for(i=0;i<n[s];i++){x+=d[k++];y+=d[k++];c.push([x/1e6,y/1e6]);}c.push([b[0],b[1]]);S[s]=c;}D.segs=S;})(window.TQ_DATA);"""
 
 
 def pack(data):
@@ -690,7 +1300,7 @@ def pack(data):
     flat = [I(c) for p in nodes for c in p]
     o["nodes"] = [v - (flat[i - 2] if i > 1 else 0) for i, v in enumerate(flat)]
     e.update(a=delta(E["a"]), b=[b - a for a, b in zip(E["a"], E["b"])], seg=delta(E["seg"]), name=delta(E["name"]),
-             rev=digits(E["rev"]), cor=digits(E["cor"]), lanes=digits(E["lanes"]), cls=digits(E["cls"]))
+             rev=digits(E["rev"]), cor=digits(E["cor"]), lanes=digits(E["lanes"]), bus=digits(E["bus"]), cls=digits(E["cls"]))
     o["edges"] = e
     ends = {}
     for a, b, s, r in zip(E["a"], E["b"], E["seg"], E["rev"]):
@@ -718,11 +1328,13 @@ def write_web(data):
 
 
 def main():
-    nodes, segs, edges = build_graph()
+    nodes, segs, edges, extra = build_graph()
+    # le moteur range les numéros d'arête de ses arbres de plus courts chemins sur 16 bits signés
+    assert len(edges) < 32768, len(edges)
     line, lpts, lcum = build_line()
     flag_corridor(edges, segs, line, lpts, lcum)
     zone_of, outlines = build_zoning()
-    points, poles, gates = build_demand(nodes, edges, zone_of)
+    points, poles, gates = build_demand(nodes, edges, zone_of, extra["ends"], extra["ports"], extra["connectors"])
     od = read_od()
     counts = build_counts(nodes, segs, edges)
     names, name_idx = [], {}
@@ -731,11 +1343,15 @@ def main():
             name_idx[e["name"]] = len(names)
             names.append(e["name"])
     data = dict(
-        meta=dict(built="2026-11-19", sources=["OpenStreetMap (ODbL)", "Ville de Québec (CC-BY 4.0)", "MTMD – EOD 2023", "MTMD – DJMA (CC-BY 4.0)"]),
+        meta=dict(built="2026-11-21", sources=["OpenStreetMap (ODbL)", "Ville de Québec (CC-BY 4.0)", "MTMD – EOD 2023", "MTMD – DJMA (CC-BY 4.0)"]),
         classes=CLASSES, zones=ZONES, nodes=nodes, segs=segs,
         edges=dict(a=[e["a"] for e in edges], b=[e["b"] for e in edges], seg=[e["seg"] for e in edges], rev=[e["rev"] for e in edges],
-                   len=[e["len"] for e in edges], speed=[e["speed"] for e in edges], lanes=[e["lanes"] for e in edges], cap=[e["cap"] for e in edges],
+                   len=[e["len"] for e in edges], speed=[e["speed"] for e in edges], lanes=[e["lanes"] for e in edges], cap=[e["cap"] for e in edges], bus=[e["bus"] for e in edges],
                    cls=[e["cls"] for e in edges], cor=[e["cor"] for e in edges], name=[name_idx[e["name"]] for e in edges]),
+        # capacité réduite ou accrue à heure fixe : [arête, véh/h, minute de début, minute de fin], jour de semaine
+        peaks=[[i, cap, start, end] for i, e in enumerate(edges) for cap, start, end in e["peaks"]],
+        # virages interdits, appliqués par éclatement du carrefour : [arête entrante, arête sortante]
+        turns_off=extra["turns_off"],
         names=names, line=line, outlines=outlines, points=points, poles=poles, gates=gates, od=od, counts=counts,
     )
     os.makedirs(os.path.join(ROOT, "web", "data"), exist_ok=True)

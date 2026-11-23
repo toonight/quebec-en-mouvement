@@ -29,12 +29,17 @@
     carCostKm: 0.22,
     transitFare: 2.53, // $ par déplacement (recette moyenne au budget 2026 du RTC)
     carCaptivity: -1, // constante de captivité automobile vis-à-vis de la ligne (min) — calée sur la prévision d'achalandage
-    walkSpeed: 80, // m/min
+    walkSpeed: 80, // m/min (4,8 km/h, hypothèse)
     walkWeight: 1.8,
     waitWeight: 1.5,
     walkMax: 1100,
     feederSpeed: 333, // m/min (20 km/h)
     rtcSpeedKmh: 17, // vitesse porte-à-porte des parcours actuels
+    // Abandon de l'auto : modes de repli d'un déplacement fait sans auto. La marche (walkSpeed) est toujours possible.
+    // Vélo : part des déplacements pour lesquels il est disponible (53 % des adultes de Québec ont fait du vélo en 2020,
+    // Vélo Québec ; l'appliquer à chaque déplacement est une hypothèse), facteur d'hiver (190 000 personnes ont roulé
+    // de décembre 2019 à mars 2020 selon l'observatoire de Vélo Québec, sur 3,4 millions de cyclistes adultes au Québec), vitesse porte-à-porte (hypothèse du modèle).
+    noCar: { bikeShare: 0.53, bikeWinterFactor: 0.056, bikeSpeedKmh: 13 },
     // Parc entièrement autonome et connecté (hypothèse) : les autos se coordonnent, les carrefours n'ont plus de feux.
     // Rues : débit par voie proche d'une circulation ininterrompue, vitesse libre sans arrêts aux feux.
     // Autoroutes : pelotons à intervalles courts. Parc électrique.
@@ -115,6 +120,42 @@
       if (cum[mid] > target) hi = mid; else lo = mid + 1;
     }
     return lo;
+  };
+
+  /**
+   * Pour l'affichage : découpe un tracé (coords, avec cum : distance cumulée en mètres) en portions couvertes par
+   * au moins un des intervalles `spans` ([début, fin] en mètres le long du tracé) et en portions non couvertes.
+   * Deux intervalles séparés de moins de `tol` mètres sont joints, et un bout de moins de `tol` mètres en début ou
+   * en fin de tracé est rattaché à la portion voisine. Retourne { on, off } : listes de { s0, s1, path }.
+   */
+  TQ.lineCover = function (coords, cum, spans, tol) {
+    const total = cum[cum.length - 1], merged = [];
+    const sorted = spans.map((x) => [Math.max(0, Math.min(x[0], x[1])), Math.min(total, Math.max(x[0], x[1]))]).filter((x) => x[1] > x[0]).sort((a, b) => a[0] - b[0]);
+    for (const x of sorted) {
+      const l = merged[merged.length - 1];
+      if (l && x[0] <= l[1] + tol) { if (x[1] > l[1]) l[1] = x[1]; } else merged.push(x);
+    }
+    if (merged.length) {
+      if (merged[0][0] <= tol) merged[0][0] = 0;
+      if (merged[merged.length - 1][1] >= total - tol) merged[merged.length - 1][1] = total;
+    }
+    const at = (s) => {
+      let lo = 0, hi = cum.length - 1;
+      while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (cum[mid] <= s) lo = mid; else hi = mid; }
+      const t = cum[hi] > cum[lo] ? (s - cum[lo]) / (cum[hi] - cum[lo]) : 0;
+      return [coords[lo][0] + (coords[hi][0] - coords[lo][0]) * t, coords[lo][1] + (coords[hi][1] - coords[lo][1]) * t];
+    };
+    const piece = (s0, s1) => {
+      const path = [at(s0)];
+      for (let i = 0; i < cum.length; i++) if (cum[i] > s0 && cum[i] < s1) path.push(coords[i]);
+      path.push(at(s1));
+      return { s0, s1, path };
+    };
+    const on = merged.map((x) => piece(x[0], x[1])), off = [];
+    let s = 0;
+    for (const x of merged) { if (x[0] > s) off.push(piece(s, x[0])); s = x[1]; }
+    if (s < total) off.push(piece(s, total));
+    return { on, off };
   };
 
   TQ.formatClock = function (t) {

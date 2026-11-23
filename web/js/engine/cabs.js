@@ -215,13 +215,14 @@
       if (t - this.lastRebalance < 300) return;
       this.lastRebalance = t;
       // quand des véhicules sont libres, le souvenir des refus et des longues attentes s'estompe
+      // (une attente déjà plus courte que 4 min reste telle qu'elle a été mesurée)
       let idle = 0;
       for (let i = 0; i < this.n; i++) if (this.state[i] === IDLE) idle++;
       if (idle > 0) {
         const share = idle / this.n;
         for (let z = 0; z < this.rejectEma.length; z++) {
           this.rejectEma[z] *= 0.9;
-          if (share > 0.3) this.waitEma[z] += (4 - this.waitEma[z]) * 0.1;
+          if (share > 0.3 && this.waitEma[z] > 4) this.waitEma[z] += (4 - this.waitEma[z]) * 0.1;
         }
       }
       let moves = Math.ceil(this.n * 0.03);
