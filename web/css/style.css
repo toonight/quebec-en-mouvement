@@ -224,3 +224,10 @@ input[type=range] { height: 24px; }
 }
 @media (prefers-reduced-motion: reduce) { .split span, .gauge-bar span { transition: none; } }
 #line-run:empty, #cab-run:empty { display: none; }
+
+/* bilan sur un an (STORY-022) */
+.year { margin-top: 6px; border-top: 1px solid var(--line); padding-top: 4px; }
+.year-actions { align-items: center; gap: 6px 14px; }
+.year-actions select { background: var(--slate-2); border: 1px solid var(--line); border-radius: 4px; padding: 4px 8px; color: var(--snow); font: inherit; color-scheme: dark; }
+.year progress { width: min(320px, 60vw); vertical-align: middle; accent-color: var(--tram); }
+.year tr.total td, .year tr.total th { font-weight: 600; }

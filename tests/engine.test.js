@@ -1105,3 +1105,120 @@ test('Cybercab : le tramway, le bus et la référence ne portent ni bornes ni po
   const ref = run({ line: 'none', cab: 'off' }, 0.1).summary();
   assert.ok(!ref.cab && !TQ.economics(ref).parts.length);
 });
+
+// ------------------------------------------------------------------ bilan sur un an (STORY-022)
+test('bilan sur un an : 12 journées types, chaque jour dans un seul type, poids = 365 en 2026 et 2027', () => {
+  const REPS_2027 = {
+    'ouv-automne': '2027-10-18', 'ouv-hiver': '2027-02-01', 'ouv-hiver-fort': '2027-12-09', 'ouv-printemps': '2027-05-14',
+    'ouv-ete': '2027-08-23', construction: '2027-07-30', 'ouv-fetes': '2027-12-23', 'sam-hiver': '2027-02-27',
+    sam: '2027-08-14', 'dim-hiver': '2027-02-21', dim: '2027-08-08', ferie: '2027-12-31',
+  };
+  const plans = {};
+  for (const y of [2026, 2027]) {
+    const p = (plans[y] = TQ.yearPlan(y));
+    assert.strictEqual(p.days, 365, `${y} n'est pas bissextile : 366 n'arrive pas`);
+    assert.strictEqual(p.groups.reduce((a, g) => a + g.weight, 0), 365);
+    assert.deepStrictEqual(p.groups.map((g) => g.key), TQ.DAY_GROUPS.map((g) => g.key));
+    const seen = new Set();
+    for (const g of p.groups) {
+      assert.strictEqual(g.dates.length, g.weight);
+      assert.ok(g.dates.includes(g.date) && TQ.dayGroup(g.date) === g.key);
+      for (const d of g.dates) { assert.ok(!seen.has(d), `${d} dans deux types`); seen.add(d); assert.strictEqual(TQ.dayGroup(d), g.key); }
+    }
+    assert.strictEqual(seen.size, 365);
+    for (let d = `${y}-01-01`; d <= `${y}-12-31`; d = TQ.addDays(d, 1)) assert.ok(seen.has(d), `${d} sans type`);
+  }
+  assert.deepStrictEqual(Object.fromEntries(plans[2027].groups.map((g) => [g.key, g.date])), REPS_2027);
+  // l'ouvrable d'hiver chargé prend la journée la plus chargée de son type (décembre, 0,95)
+  const fort = plans[2027].groups.find((g) => g.key === 'ouv-hiver-fort');
+  assert.strictEqual(fort.factor, Math.max(...fort.dates.map((d) => TQ.dayInfo(d).total)));
+  // les représentants de 2026 et de 2027 sont la même journée (facteurs, profil, voies, grille, hiver) : une seule
+  // référence des automobilistes par type sert aux deux années
+  const sig = (d) => { const i = TQ.dayInfo(d); return JSON.stringify([i.type, i.f, i.profile, i.total, i.peakLanes, i.service, i.winter]); };
+  plans[2026].groups.forEach((g, i) => assert.strictEqual(sig(g.date), sig(plans[2027].groups[i].date), g.key));
+  assert.throws(() => TQ.yearPlan(2025), /hors du calendrier/);
+  assert.throws(() => TQ.yearPlan(2028), /hors du calendrier/);
+});
+
+test('bilan sur un an : journalier additionné, annuel compté une fois, bornes sur la plus forte pointe', () => {
+  const plan = TQ.yearPlan(2027), E = TQ.ECON, N = plan.days;
+  // ligne : recettes et km pondérés ; coûts fixes et investissement une seule fois par an
+  const line = {}, cab = {};
+  plan.groups.forEach((g, i) => {
+    line[g.key] = { elapsedH: 24, scenario: { line: 'tram', cab: 'off', date: g.date }, line: { kind: 'tram', boardings: 40000 + 1000 * i, vehKm: 6000 + 10 * i } };
+    cab[g.key] = { elapsedH: 24, scenario: { line: 'none', cab: 'wide', date: g.date },
+      cab: { fleet: 3000, rides: 50000, revenue: 300000 + 1000 * i, vkmEmpty: 1e5, vkmLoaded: 3e5 + 1e3 * i, speed: 30, kwh: 6e4 + 100 * i, chargers: 20 + i, chargePeakKw: 1500 + 10 * i } };
+  });
+  cab['ouv-hiver-fort'].cab.chargers = 52; cab['ouv-hiver-fort'].cab.chargePeakKw = 4162;
+  const w = (k) => plan.groups.find((g) => g.key === k).weight, keys = plan.groups.map((g) => g.key);
+  const L = TQ.annualize(line, plan, E), p = E.line.tram;
+  const sum = (f) => keys.reduce((a, k) => a + w(k) * f(k), 0);
+  assert.ok(Math.abs(L.revenue - sum((k) => line[k].line.boardings * E.transitFare)) < 1e-6);
+  assert.ok(Math.abs(L.opex - (sum((k) => line[k].line.vehKm * p.opexKm) + p.fixedYear)) < 1e-4);
+  assert.ok(Math.abs(L.capital - p.capex * TQ.annuity(E.discount, p.life)) < 1e-4);
+  assert.strictEqual(L.capex, p.capex);
+  assert.ok(Math.abs(L.net - (L.revenue - L.opex - L.capital)) < 1e-6);
+  assert.ok(Math.abs(L.byType.reduce((a, t) => a + t.net, 0) - L.net) < 1e-4);
+  // Cybercab : 52 bornes et 4 162 kW (le jour d'hiver chargé), pas celles de l'automne
+  const C = TQ.annualize(cab, plan, E), it = C.parts[0].items, EY = Object.assign({}, E, { daysPerYear: N });
+  assert.deepStrictEqual(C.sizing, { chargers: 52, chargePeakKw: 4162 });
+  assert.strictEqual(it.nChargers, 52);
+  const sizing = C.sizing, c0 = TQ.cabCosts(cab['ouv-automne'], EY, sizing), q = E.cab;
+  const daily = sum((k) => { const o = TQ.cabCosts(cab[k], EY, sizing).opex; return o.km + o.supervision + o.cleaning; });
+  const W = q.power, mk = sum((k) => cab[k].cab.kwh) / 12 / c0.depots;
+  const energy = 12 * c0.depots * (Math.min(mk, W.energy1Kwh) * W.energy1 + Math.max(0, mk - W.energy1Kwh) * W.energy2);
+  const yearly = 3000 * q.fixedYearPerVeh + energy + 12 * W.demandKwMonth * 4162 + 52 * q.charger.maintYear + c0.opex.depot + c0.opex.tax;
+  assert.ok(Math.abs(C.opex - (daily + yearly)) < 1e-3, `${C.opex} contre ${daily + yearly}`);
+  assert.ok(Math.abs(C.capital - c0.capitalYear) < 1e-3);
+  assert.ok(Math.abs(C.revenue - sum((k) => cab[k].cab.revenue)) < 1e-6);
+  // un type manquant ou une journée incomplète : refusé
+  const partial = Object.assign({}, line); delete partial.ferie;
+  assert.throws(() => TQ.annualize(partial, plan, E), /ferie/);
+  assert.throws(() => TQ.annualize(Object.assign({}, line, { dim: Object.assign({}, line.dim, { elapsedH: 12 }) }), plan, E), /dim/);
+});
+
+test('bilan sur un an : bornes et kW pris chacun sur leur maximum, de types différents ; tranches du tarif sur les kWh annuels', () => {
+  const plan = TQ.yearPlan(2027), E = TQ.ECON, N = plan.days, EY = Object.assign({}, E, { daysPerYear: N });
+  const cab = {};
+  plan.groups.forEach((g, i) => {
+    cab[g.key] = { elapsedH: 24, scenario: { line: 'none', cab: 'corridor', date: g.date },
+      cab: { fleet: 500, rides: 8000, revenue: 50000, vkmEmpty: 2e4, vkmLoaded: 5e4, speed: 30, kwh: i % 2 ? 20000 : 2000, chargers: 18, chargePeakKw: 1387 } };
+  });
+  // les bornes viennent du jour ouvrable d'hiver, les kW du samedi d'hiver : chacun garde son propre maximum
+  cab['ouv-hiver'].cab.chargers = 35; cab['ouv-hiver'].cab.chargePeakKw = 2000;
+  cab['sam-hiver'].cab.chargers = 30; cab['sam-hiver'].cab.chargePeakKw = 2774;
+  const C = TQ.annualize(cab, plan, E);
+  assert.deepStrictEqual(C.sizing, { chargers: 35, chargePeakKw: 2774 });
+  assert.strictEqual(C.parts[0].items.nChargers, 35);
+  // journées à 2 000 kWh (sous la première tranche une fois ramenées au mois) et à 20 000 kWh (au-dessus) : la somme
+  // des journées ne fait pas les tranches de l'année, l'écart est porté à energyAdjust
+  const c0 = TQ.cabCosts(cab['ouv-automne'], EY, C.sizing), W = E.cab.power;
+  assert.ok(2000 * N / 12 / c0.depots < W.energy1Kwh && 20000 * N / 12 / c0.depots > W.energy1Kwh);
+  const kwh = plan.groups.reduce((a, g) => a + g.weight * cab[g.key].cab.kwh, 0), mk = kwh / 12 / c0.depots;
+  const energyYear = 12 * c0.depots * (Math.min(mk, W.energy1Kwh) * W.energy1 + Math.max(0, mk - W.energy1Kwh) * W.energy2);
+  const energyDays = plan.groups.reduce((a, g) => a + g.weight * TQ.cabCosts(cab[g.key], EY, C.sizing).opex.energy, 0) / N;
+  assert.ok(Math.abs(C.energyAdjust) > 1000, `${C.energyAdjust}`);
+  assert.ok(Math.abs(C.energyAdjust - (energyYear - energyDays)) < 1e-6, `${C.energyAdjust}`);
+  const daily = plan.groups.reduce((a, g) => a + g.weight * TQ.economics(cab[g.key], EY, C.sizing).opex, 0);
+  assert.ok(Math.abs(C.opex - (daily + C.energyAdjust)) < 1e-6);
+});
+
+test('références des automobilistes : normal et winter inchangés, une journée datée prend celle de son type', () => {
+  const R = TQ.REFERENCE;
+  assert.deepStrictEqual(R.normal, { carVkm: 14493945, carDelayH: 91218, delayPerVkm: 0.006293538, vhPerVkm: 0.022981675 });
+  assert.deepStrictEqual(R.winter, { carVkm: 14529460, carDelayH: 118799, delayPerVkm: 0.008176393, vhPerVkm: 0.026405933 });
+  for (const g of TQ.yearPlan(2027).groups) {
+    if (g.key === 'ouv-automne') { assert.ok(!R[g.key]); continue; } // la journée de « normal »
+    assert.ok(R[g.key] && R[g.key].date === g.date && R[g.key].delayPerVkm > 0, g.key);
+  }
+  const s = (scenario) => ({ elapsedH: 24, scenario, carVkm: 1e7, carDelayH: 50000 });
+  assert.strictEqual(TQ.referenceFor(s({})), R.normal);
+  assert.strictEqual(TQ.referenceFor(s({ winter: true })), R.winter);
+  assert.strictEqual(TQ.referenceFor(s({ date: '2026-02-10', winter: true })), R['ouv-hiver']);
+  assert.strictEqual(TQ.referenceFor(s({ date: '2027-07-04', winter: false })), R.dim);
+  assert.strictEqual(TQ.referenceFor(s({ date: '2027-10-19', winter: false })), R.normal);
+  // case « Journée d'hiver » cochée sur une date d'été : la référence d'hiver, comme sans date
+  assert.strictEqual(TQ.referenceFor(s({ date: '2027-07-06', winter: true })), R.winter);
+  const y = TQ.economics(Object.assign(s({ date: '2027-12-25', winter: true }), { line: { kind: 'tram', boardings: 0, vehKm: 0 } })).society;
+  assert.ok(Math.abs(y.drivers - (R.ferie.delayPerVkm - 50000 / 1e7) * 1e7 * TQ.ECON.carOccupancy * TQ.ECON.vot) < 1e-6);
+});

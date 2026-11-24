@@ -254,6 +254,16 @@
   <p class="actions"><button class="link" id="run-day">Simuler la journée complète de ce scénario</button>
     <button class="link" id="run-all">Simuler quatre scénarios types (tramway, autobus, Cybercab le long du tracé, Cybercab sur le réseau élargi)</button></p>
   <button class="link" id="compare-fares" hidden>Comparer le prix de la course entière et le prix par occupant</button>
+  <section class="year" aria-labelledby="year-title">
+    <h3 id="year-title">Bilan sur un an</h3>
+    <p class="hint">Le scénario en cours est simulé sur 12 journées types de l’année (jours ouvrables par saison, samedis, dimanches, fériés), chacune pondérée par son nombre de jours. La case « Journée d’hiver » n’y sert pas : la saison vient de la date de chaque journée type. Le calcul prend de 20 secondes à quelques minutes selon l’appareil.</p>
+    <p class="actions year-actions"><label for="year-pick">Année</label>
+      <select id="year-pick"><option value="2026">2026</option><option value="2027" selected>2027</option></select>
+      <button class="link" id="run-year">Bilan sur un an</button>
+      <button class="link" id="year-cancel" hidden>Annuler</button></p>
+    <p class="hint" id="year-progress" hidden><progress id="year-bar" max="1" value="0"></progress> <span id="year-status" role="status"></span></p>
+    <div id="year-result"></div>
+  </section>
   <div id="compare"></div>
 </dialog>
 

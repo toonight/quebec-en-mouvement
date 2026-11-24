@@ -137,6 +137,91 @@ node tests/econ_report.js --modes
 Dans l’application, ouvrir **Comparer les journées simulées**, simuler une journée avec des Cybercab,
 puis sélectionner **Comparer le prix de la course entière et le prix par occupant**.
 
+## 📆 Bilan sur un an
+
+Les montants ci-dessus multiplient le jour type d’automne par 300. Le bouton **Bilan sur un an**
+(dans **Comparer les journées simulées**) fait un vrai bilan de l’année 2026 ou 2027 pour le scénario
+en cours. Chaque jour de l’année est rangé dans une des 12 journées types. Chaque type est simulé
+une fois, à une date représentative, puis compté autant de fois qu’il a de jours.
+
+| Journée type | Date simulée en 2027 | Jours en 2026 | Jours en 2027 | Facteur de la journée |
+|---|---|---:|---:|---:|
+| Jour ouvrable d’automne (septembre à novembre) | 18 octobre | 63 | 63 | 1,00 |
+| Jour ouvrable d’hiver (janvier et février) | 1er février | 39 | 38 | 0,91 |
+| Jour ouvrable d’hiver chargé (mars, 1er au 20 décembre) | 9 décembre | 36 | 36 | 0,95 |
+| Jour ouvrable de printemps (avril à juin) | 14 mai | 62 | 63 | 1,04 |
+| Jour ouvrable d’été (juillet et août, rentrée comprise) | 23 août | 33 | 33 | 1,03 |
+| Vacances de la construction | 30 juillet | 10 | 10 | 0,98 |
+| Jour ouvrable des Fêtes (21 au 31 décembre, 2 au 5 janvier) | 23 décembre | 7 | 9 | 0,77 |
+| Samedi d’hiver (décembre à mars) | 27 février | 16 | 15 | 0,80 |
+| Samedi d’avril à novembre | 14 août | 35 | 35 | 0,90 |
+| Dimanche d’hiver (décembre à mars) | 21 février | 17 | 16 | 0,72 |
+| Dimanche d’avril à novembre | 8 août | 35 | 35 | 0,80 |
+| Jour férié ou chômé | 31 décembre | 12 | 12 | 0,71 |
+| **Total** | | **365** | **365** | |
+
+La date représentative est celle dont le facteur est le plus proche de la moyenne du type. Le jour
+ouvrable d’hiver chargé fait exception : il prend un jour de décembre à 0,95, la journée la plus
+chargée de son type (ce qui sous-représente un peu les jours de mars : environ −0,7 % sur le bilan
+pour la société dans le corridor avec 500 Cybercab, estimé sur un seul jour de mars). Les dates de 2026 ont les mêmes facteurs, voies réservées et horaires que
+celles de 2027 : les 12 journées simulées sont les mêmes, seuls les poids changent.
+
+Comment l’année est comptée :
+
+- Les recettes, l’exploitation au kilomètre, la supervision, le nettoyage et les effets sur les
+  voyageurs, les automobilistes, le CO₂ et le RTC s’additionnent journée par journée.
+- L’investissement étalé, les coûts fixes, l’entretien des dépôts et des bornes, les taxes et la
+  prime de puissance ne sont comptés qu’une fois par an.
+- Cybercab : les bornes et la prime de puissance sont dimensionnées sur la plus forte pointe de
+  recharge des 12 journées, un jour d’hiver (le 9 décembre à 3 000 véhicules sur le réseau élargi,
+  le 1er février à 500 véhicules dans le corridor). L’électricité suit les tranches du tarif M sur les kWh
+  de l’année.
+- Le temps des automobilistes de chaque journée type est comparé à la situation actuelle du même
+  jour (aucune ligne, aucune flotte), simulée à la même date.
+- La case « Journée d’hiver » n’y sert pas : la saison vient de la date de chaque journée type.
+
+Résultats en 2027, en M$ par an, avec la même demande et les coûts par défaut :
+
+| Scénario | Exploitant, jour type × 300 | Exploitant, bilan sur un an | Société, jour type × 300 | Société, bilan sur un an | Bornes, jour type / un an |
+|---|---:|---:|---:|---:|---:|
+| Tramway | −372,6 | −372,8 | −367,9 | −367,4 | – |
+| Autobus en voies réservées | −73,6 | −73,5 | −79,2 | −78,7 | – |
+| Cybercab, corridor, 500 véhicules | +21,9 | +25,9 | +28,8 | +37,8 | 18 / 35 |
+| Cybercab, réseau élargi, 3 000 véhicules | +31,2 | +40,0 | +58,9 | +77,8 | 30 / 52 |
+
+En 2026, les résultats diffèrent de ceux de 2027 de moins de 0,1 M$ par an.
+
+Pour le tramway et les autobus, le × 300 tombait presque juste. Pour les Cybercab, le bilan sur un
+an dépasse le × 300 de 18 à 28 % pour l’exploitant et d’environ 31 % pour la société (écart rapporté
+au × 300, comme dans la page). Le × 300 compte
+300 jours ouvrables d’automne ; l’année en compte 365, dont des fins de semaine qui rapportent
+aussi aux Cybercab, et un printemps et un été plus chargés. Les bornes, elles, augmentent : la pointe
+de recharge d’hiver en demande de 70 à 95 % de plus que celle de l’automne.
+
+Précision mesurée : en 2027, les 365 jours ont été simulés un par un pour le tramway et pour
+3 000 Cybercab sur le réseau élargi. L’écart des 12 journées types avec cette somme est de
+−0,04 % pour l’exploitant et +0,1 % pour la société avec le tramway, de −0,5 % et +1,4 % avec les
+Cybercab. Pour les autres scénarios, l’écart n’est pas mesuré : environ 2 %, en ordre de grandeur,
+et jusqu’à environ 5 % pour le bilan pour la société des Cybercab (voir les limites).
+
+Limites :
+
+- Une seule journée par type, avec la même graine : selon la date retenue dans chaque type, le
+  bilan pour la société des Cybercab varierait d’environ 5 %.
+- Le jour de l’An (0,48) et Noël (0,56) sont représentés par le 31 décembre (0,71). L’effet sur
+  l’année reste sous 0,1 M$.
+- Du 28 au 30 décembre, la ligne roule à l’horaire du samedi, mais leur journée type (le 23 décembre)
+  a l’horaire de semaine. Le Vendredi saint n’a pas de voies réservées, son type en a.
+- La pointe des bornes ne tient qu’à quelques véhicules simulés : de 39 à 48 bornes pour des jours
+  d’hiver de même facteur à 3 000 véhicules sur le réseau élargi, de 26 à 35 à 500 véhicules dans le
+  corridor, selon la date. La « plus forte pointe de l’année » est celle des 12 journées simulées :
+  elle égale le maximum des 365 jours à 3 000 véhicules sur le réseau élargi, et aucun des 12 jours
+  de plus simulés dans le corridor ne la dépasse, mais un autre jour pourrait la dépasser ailleurs.
+- La prime de puissance compte la pointe de l’année chaque mois, ce qui est prudent.
+- Le calcul demande environ 25 secondes sur un ordinateur de 20 cœurs, 40 secondes sur 8 cœurs et
+  1 minute 15 sur 4 cœurs (mesuré en limitant le nombre de workers, sur une machine rapide ; une
+  machine plus lente prend plus longtemps).
+
 ## 🗺️ Aperçu
 
 | Vue en plan : la pointe du matin avec le tramway | Vue 3D : Saint-Roch, tramway et Cybercab |
@@ -178,6 +263,9 @@ Le dossier `web/` est un site statique : il se publie tel quel, par exemple sur 
   déplacements et rentabilité. Deux boutons simulent d'un coup la journée du scénario, ou quatre scénarios types.
   Pour chaque journée avec des déplacements faits sans auto, la comparaison affiche aussi le bilan annuel
   du même scénario à 0 % et l’écart entre les deux. La journée à 0 % est réutilisée ou calculée en arrière-plan.
+- **Bilan sur un an** : dans la comparaison, choisir 2026 ou 2027 et lancer le calcul. Les 12 journées
+  types du scénario en cours sont simulées en arrière-plan, avec la progression et un bouton « Annuler ».
+  Le tableau donne le bilan de l'année à côté du jour type × 300, et le détail par journée type.
 - **Déplacements faits sans auto** : le bilan pour la société a un poste à part pour ces voyageurs, qui n'ont
   pas choisi leur nouveau mode (autobus, marche, vélo ou Cybercab). Il compte ce qu'ils gagnent ou
   perdent en temps et en argent par rapport à l'auto. Le gain des voyageurs ne compte que ceux qui ont choisi de changer.
@@ -235,8 +323,11 @@ Limites :
 - Aucune hausse du débit n'est mesurée avant Noël : décembre est un peu plus bas que l'automne. La congestion de
   décembre (neige, commerces) n'est pas reproduite.
 - La part du transport collectif ne change pas selon la saison.
-- La rentabilité d'une journée datée est encore ramenée à l'année comme un jour type (300 fois la journée), et le
-  temps des automobilistes est comparé à une journée de référence de jour type. Un vrai bilan sur un an est prévu à part.
+- La rentabilité d'une journée datée est ramenée à l'année comme un jour type (300 fois la journée). Son temps des
+  automobilistes est comparé à la situation actuelle de sa journée type, simulée à sa date représentative. Un jour
+  moins ou plus chargé que ce représentant (jour de l'An, 24 juin, retour des Fêtes, début juillet) y paraît encore
+  gagner ou perdre du temps : jusqu'à environ 150 M$ par an sur ce poste (environ 20 M$ en moyenne sur les jours de
+  2027). Pour l'année, voir le bilan sur un an, qui n'a pas ce biais.
 
 ## 📊 Ce que le modèle reproduit
 
@@ -260,9 +351,11 @@ Limites :
   supervision. Le coût des bornes vient d'études américaines (2013 et 2019). La journée simulée
   part de batteries chargées de 50 à 100 % : elle compte moins de recharges qu'en régime établi,
   et le nombre de bornes est probablement sous-estimé. La pointe de recharge ne tient qu'à
-  quelques véhicules simulés (chacun en représente environ 3,6). Les bornes et la prime de
-  puissance viennent d'une journée hors hiver : un jour d'hiver demande environ 45 % de bornes en
-  plus (26 au lieu de 18 dans le corridor avec 500 véhicules).
+  quelques véhicules simulés (chacun en représente environ 3,6). Dans les tableaux du jour type,
+  les bornes et la prime de puissance viennent d'une journée d'automne : un jour d'hiver en demande
+  davantage dans le corridor avec 500 véhicules : 26 bornes au lieu de 18 avec la case « Journée
+  d'hiver », 35 le 1er février 2027. Le bilan sur un an les
+  dimensionne sur la plus forte pointe de l'année.
 - Les coûts d'exploitation du tramway et l'investissement du bus en voies réservées sont des
   hypothèses, faute de chiffres officiels pour ce tracé.
 - Les limites de Lévis et de la ceinture nord sont approximées.
@@ -286,8 +379,9 @@ node tests/make_reference.js
   autos retirées, provenance des passagers et congestion. `HOURLY=1` ajoute le détail par
   heure, `POOL=1` les courses partagées, `CARFREE=0.1` dix pour cent des déplacements automobiles de la zone desservie faits sans auto.
   Un seul mode à la fois : une ligne (`tram`, `bus`) va avec `off`, une flotte avec `none`.
-- `make_reference.js` : régénère `web/js/engine/reference.js`, la journée de référence qui
-  sert au calcul du temps des automobilistes. À relancer après tout changement du moteur.
+- `make_reference.js` : régénère `web/js/engine/reference.js`, les journées de référence qui
+  servent au calcul du temps des automobilistes : le jour type (`normal`, `winter`) et une par
+  journée type du bilan sur un an (environ 3 minutes). À relancer après tout changement du moteur.
 
 Pour reconstruire les données à partir des sources (Python 3) :
 

@@ -111,6 +111,25 @@
     return { chargers, fromRatio, kwInstalled, peakKw, depots, parkM2, buildM2, vh, capex, capexTotal, capitalYear, opex };
   };
 
+  /** Journée de référence (aucune ligne, aucune flotte) à laquelle comparer le temps des automobilistes du résumé s.
+   *  Sans date : 'normal', ou 'winter' avec la case « Journée d'hiver » (jour type d'automne en conditions d'hiver).
+   *  Avec une date : la référence de sa journée type (TQ.dayGroup), simulée à la date représentative de ce type ; le
+   *  type d'automne prend 'normal' (même journée). Repli sur 'normal' ou 'winter' si la clé manque, ou si la case
+   *  « Journée d'hiver » impose l'hiver à une date qui ne l'est pas.
+   *  Limite : la référence n'est exacte qu'à la date représentative du type. Une autre date moins ou plus chargée
+   *  (jour de l'An, 24 juin, retour des Fêtes, début juillet) garde un biais sur le temps des automobilistes,
+   *  jusqu'à environ 150 M$ par an ramené à l'année (mesuré en 2027) ; le bilan sur un an n'est pas touché. */
+  TQ.referenceFor = function (s) {
+    const R = TQ.REFERENCE, sc = (s && s.scenario) || {};
+    if (!R) return undefined;
+    const fallback = R[sc.winter ? 'winter' : 'normal'];
+    if (sc.date == null || !TQ.dayGroup) return fallback;
+    let info;
+    try { info = TQ.dayInfo(sc.date); } catch (e) { return fallback; }
+    if (!!sc.winter !== !!info.winter) return fallback;
+    return R[TQ.dayGroup(sc.date)] || fallback;
+  };
+
   /** s : résultat de Simulation.summary(). Les montants couvrent la période simulée (s.elapsedH). */
   TQ.economics = function (s, E, cabSizing) {
     E = E || TQ.ECON;
@@ -169,7 +188,7 @@
       soc.rtcLoss = -(fromRtc - (s.toRtc || 0)) * E.transitFare;
       soc.co2 = (s.co2Avoided || 0) * E.carbon;
       // automobilistes restants : écart de temps perdu par kilomètre avec la journée de référence
-      const ref = TQ.REFERENCE && TQ.REFERENCE[s.scenario && s.scenario.winter ? 'winter' : 'normal'];
+      const ref = TQ.referenceFor(s);
       if (ref && s.carVkm > 0) soc.drivers = (ref.delayPerVkm - s.carDelayH / s.carVkm) * s.carVkm * E.carOccupancy * E.vot;
       // parc autonome : la vitesse libre change aussi (plus d'arrêts aux feux), on compare donc le temps total par kilomètre
       if (ref && ref.vhPerVkm && s.carVkm > 0 && s.carVh > 0 && s.scenario && s.scenario.auto) soc.drivers = (ref.vhPerVkm - s.carVh / s.carVkm) * s.carVkm * E.carOccupancy * E.vot;
@@ -213,6 +232,66 @@
       for (const k of keys) out[k] += all[i][k];
       for (const p of all[i].parts) { const q = out.parts.find((x) => x.key === p.key); if (q) for (const k of keys) q[k] += p[k]; }
     });
+    return out;
+  };
+
+  /** Bilan sur un an par journées types (STORY-022). plan : TQ.yearPlan(année) ; byType : { clé du type: résumé d'une
+   *  journée complète simulée à la date représentative de ce type }. Chaque type est passé à TQ.economics avec
+   *  daysPerYear = nombre de jours de l'année, puis pondéré par son nombre de jours :
+   *  - ce qui est journalier (recettes, exploitation au km, supervision, nettoyage, gains des voyageurs, temps des
+   *    automobilistes, CO2, recettes du RTC) est additionné journée par journée ;
+   *  - ce qui est annuel (investissement étalé, coûts fixes, entretien des dépôts et des bornes, taxes, prime de
+   *    puissance) vaut x / jours par journée, donc une seule fois par an une fois pondéré (somme des poids = jours) ;
+   *  - Cybercab : bornes, kW installés, dépôts et prime de puissance sur la plus forte pointe de toutes les journées
+   *    types (comme TQ.economicsTotal) ; l'énergie suit les deux tranches du tarif M sur les kWh de l'année.
+   *  Retourne les totaux de l'année (même forme que economics().annual, plus parts et capex), byType (la part de chaque
+   *  type : poids × journée) et sizing. Erreur si un type du plan n'a pas de résumé complet. */
+  TQ.annualize = function (byType, plan, E) {
+    E = E || TQ.ECON;
+    const EY = Object.assign({}, E, { daysPerYear: plan.days });
+    const list = plan.groups.map((g) => {
+      const s = byType && byType[g.key];
+      if (!s || !(s.elapsedH >= 24 - 1e-6)) throw new Error(`Bilan sur un an : la journée type « ${g.key} » manque ou n'est pas complète.`);
+      return s;
+    });
+    const sized = list.filter((s) => s.cab && Number.isFinite(s.cab.chargers) && s.cab.chargers >= 0);
+    const sizing = sized.length ? {
+      chargers: Math.max(...sized.map((s) => s.cab.chargers)),
+      chargePeakKw: Math.max(...sized.map((s) => (Number.isFinite(s.cab.chargePeakKw) ? s.cab.chargePeakKw : 0))),
+    } : null;
+    const keys = ['riders', 'revenue', 'opex', 'capital'], socKeys = ['riders', 'carFree', 'drivers', 'co2', 'rtcLoss'];
+    const out = { year: plan.year, days: plan.days, capex: 0, riders: 0, revenue: 0, opex: 0, capital: 0, parts: [], byType: [], sizing, energyAdjust: 0 };
+    const soc = (out.society = { riders: 0, carFree: null, drivers: null, co2: 0, rtcLoss: 0 });
+    let kwh = 0, energyDays = 0, depots = 1;
+    plan.groups.forEach((g, i) => {
+      const s = list[i], e = TQ.economics(s, EY, sizing), w = g.weight;
+      for (const k of keys) out[k] += w * e[k];
+      for (const k of socKeys) if (e.society[k] != null) soc[k] = (soc[k] || 0) + w * e.society[k];
+      for (const p of e.parts) {
+        let q = out.parts.find((x) => x.key === p.key);
+        if (!q) { q = { key: p.key, kind: p.kind, capex: p.capex, riders: 0, revenue: 0, opex: 0, capital: 0 }; if (p.items) q.items = Object.assign({}, p.items); out.parts.push(q); }
+        for (const k of keys) q[k] += w * p[k];
+      }
+      if (s.cab) {
+        const c = TQ.cabCosts(s, EY, sizing);
+        kwh += w * s.cab.kwh; energyDays += (w * c.opex.energy) / plan.days; depots = c.depots;
+      }
+      out.byType.push({ key: g.key, label: g.label, date: g.date, weight: w, factor: g.factor, summary: s,
+        revenue: w * e.revenue, opex: w * e.opex, capital: w * e.capital, net: w * e.net, society: w * e.society.net });
+    });
+    // électricité : les deux tranches du tarif M s'appliquent aux kWh de chaque mois de l'année (kWh de l'année / 12,
+    // par dépôt), pas à ceux d'une journée multipliés : écart avec la somme des journées, porté aux coûts du Cybercab
+    if (list.some((s) => s.cab)) {
+      const W = E.cab.power, monthKwh = kwh / 12 / depots;
+      const energy = 12 * depots * (Math.min(monthKwh, W.energy1Kwh) * W.energy1 + Math.max(0, monthKwh - W.energy1Kwh) * W.energy2);
+      out.energyAdjust = energy - energyDays;
+      out.opex += out.energyAdjust;
+      const q = out.parts.find((x) => x.key === 'cab'); if (q) q.opex += out.energyAdjust;
+    }
+    for (const p of out.parts) { p.operating = p.revenue - p.opex; p.net = p.operating - p.capital; out.capex += p.capex; }
+    out.operating = out.revenue - out.opex;
+    out.net = out.operating - out.capital;
+    soc.net = out.net + soc.riders + (soc.carFree || 0) + soc.rtcLoss + soc.co2 + (soc.drivers || 0);
     return out;
   };
 })();

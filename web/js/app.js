@@ -1388,10 +1388,10 @@
     const kindNote = kinds.length > 1
       ? `<p class="warn" role="note">Ces journées ne sont pas du même type de jour (${kinds.map((k) => esc(dayKindText(sim.history.find((s) => dayKind(s.scenario.date) === k).scenario.date))).join(' ; ')}). Comparez seulement les lignes d’un même type de jour.</p>`
       : '';
-    // journées datées : l'année reste 300 fois la journée, et la référence des automobilistes reste un jour type
+    // journées datées : l'année reste 300 fois la journée ; la référence des automobilistes est celle de la journée type
     const dated = sim.history.some((s) => s.scenario.date != null);
     const datedNote = dated
-      ? '<p class="hint">Une journée datée est ici ramenée à l’année comme un jour type, soit 300 fois la journée : ce n’est pas un bilan sur un an. Son « Temps des automobilistes » est comparé à une journée de référence de jour type (automne, ou hiver de décembre à mars). Un jour moins chargé (samedi, férié, vacances) y paraît donc gagner du temps, et un jour plus chargé (été) en perdre, sans que le scénario y soit pour quelque chose.</p>'
+      ? '<p class="hint">Une journée datée est ici ramenée à l’année comme un jour type, soit 300 fois la journée : ce n’est pas un bilan sur un an (voir « Bilan sur un an » plus haut). Son « Temps des automobilistes » est comparé à la situation actuelle de sa journée type (par exemple un samedi d’été), simulée à une date représentative. Un jour moins chargé ou plus chargé que ce représentant (jour de l’An, 24 juin, retour des Fêtes, début juillet) y paraît encore gagner ou perdre du temps : jusqu’à environ 150 M$ par an sur ce poste.</p>'
       : '';
     el.innerHTML = `${kindNote}${carFreeComparison()}${fareComparison()}<div class="table-wrap"><table><thead><tr><th>Scénario</th><th>Jour</th><th>Montées sur la ligne</th><th>Charge max. par heure</th><th>Vitesse de la ligne (km/h)</th><th>Passagers Cybercab</th><th>Km à vide</th><th>Trajets auto évités</th><th>Vitesse auto (km/h)</th><th>Temps perdu</th><th>${co2Heading} (t)</th></tr></thead><tbody>${rows}</tbody></table></div>
       <p class="hint">Les émissions du nouveau service sont déduites. Une valeur négative indique une hausse des émissions. Les changements d’itinéraire des autos restantes sont exclus.</p>
@@ -1400,6 +1400,99 @@
       ${econChart()}
       <div class="table-wrap"><table><thead><tr><th>Scénario</th><th>Jour</th><th>Investissement</th><th>Recettes</th><th>Exploitation</th><th>Investissement étalé</th><th>Résultat de l'exploitant</th><th>Gain des voyageurs</th><th>Déplacements faits sans auto</th><th>Temps des automobilistes</th><th>Valeur du ${co2Heading}</th><th>Recettes des autobus du RTC</th><th>Bilan pour la société</th></tr></thead><tbody>${sim.history.map(econRow).join('')}</tbody></table></div>
       <p class="hint">Le bilan pour la société additionne le résultat de l'exploitant et les cinq colonnes qui le précèdent. « Déplacements faits sans auto » ne se remplit qu'avec l'option d'abandon de l'auto : c'est l'écart de coût généralisé (temps, attente, marche, tarif, stationnement, coût au kilomètre) entre l'auto et le mode de remplacement, sans les économies de possession de l'auto. « Recettes des autobus du RTC » est négatif quand des usagers quittent les autobus, positif quand des déplacements faits sans auto s'y reportent. Le résultat de l'exploitant et le bilan changent avec les curseurs « Hypothèses de coûts ». Pour les Cybercab, l'investissement se détaille en véhicules, bornes (nombre tiré de la pointe de recharge simulée, plus ${fmt.format(TQ.PARAMS.cab.chargerMargin * 100)} %), raccordement électrique et dépôts (terrain, stationnement et bâtiment), chacun étalé sur sa durée de vie.</p>`;
+  }
+
+  // ------------------------------------------------------------------ bilan sur un an (STORY-022)
+  // Les 12 journées types du scénario en cours, simulées dans des workers (au plus un par cœur, moins un), puis
+  // additionnées par TQ.annualize avec les coûts en vigueur. yearRun : dernier bilan demandé.
+  let yearRun = null;
+  // scénario du bilan : celui en cours, sans date ni case « Journée d'hiver » (la date de chaque journée type fait la saison)
+  const yearScenario = () => { const sc = Object.assign({}, sim.scenario, { winter: false }); delete sc.date; return exclusive(sc); };
+  const pct1 = (v) => `${v > 0.0005 ? '+' : v < -0.0005 ? '−' : ''}${fmt1.format(Math.abs(v) * 100)} %`;
+
+  function yearStop() {
+    if (yearRun && yearRun.workers) { yearRun.workers.forEach((w) => w.terminate()); yearRun.workers = null; }
+  }
+
+  function runYear() {
+    yearStop();
+    const scenario = yearScenario(), plan = TQ.yearPlan(+$('year-pick').value);
+    // situation de référence (ni ligne, ni Cybercab, ni parc autonome) : rien à simuler
+    if (scenario.line === 'none' && scenario.cab === 'off' && !scenario.auto) { yearRun = { scenario, plan, summaries: {}, progress: {}, state: 'reference' }; renderYear(); return; }
+    const run = (yearRun = { scenario, plan, summaries: {}, progress: {}, t0: performance.now(), state: 'running', reused: false });
+    // le type d'automne est le jour type actuel (même journée) : déjà simulé pour ce scénario, il est repris
+    const autumn = comparisonDays.get(scenarioKey(scenario));
+    if (autumn && autumn.elapsedH >= 24 - 1e-6) { run.summaries['ouv-automne'] = autumn; run.reused = true; }
+    const todo = plan.groups.filter((g) => !run.summaries[g.key]).map((g) => ({ key: g.key, date: g.date }));
+    const n = Math.max(1, Math.min(todo.length, (navigator.hardwareConcurrency || 2) - 1, 12));
+    const shares = Array.from({ length: n }, () => []);
+    todo.forEach((d, i) => shares[i % n].push(d));
+    const fail = () => { if (yearRun !== run) return; yearStop(); run.state = 'failed'; renderYear(); };
+    try {
+      run.workers = shares.map((days) => {
+        const w = new Worker('js/comparison-day.worker.js');
+        w.onmessage = ({ data }) => {
+          if (yearRun !== run) return;
+          if (data.kind === 'progress') run.progress[data.key] = Math.min(1, data.hour / 24);
+          else if (data.kind === 'day') { run.summaries[data.key] = data.summary; run.progress[data.key] = 1; }
+          if (plan.groups.every((g) => run.summaries[g.key])) { yearStop(); run.state = 'done'; run.ms = performance.now() - run.t0; }
+          renderYear();
+        };
+        w.onerror = w.onmessageerror = fail;
+        w.postMessage({ kind: 'year', scenario, seed: sim.seed, days });
+        return w;
+      });
+    } catch (e) { fail(); }
+    renderYear();
+  }
+
+  function renderYear() {
+    const el = $('year-result'), run = yearRun, busy = !!run && run.state === 'running';
+    $('run-year').disabled = busy; $('year-pick').disabled = busy;
+    $('year-cancel').hidden = !busy; $('year-progress').hidden = !busy;
+    if (!run) { el.innerHTML = ''; return; }
+    const total = run.plan.groups.length, finished = run.plan.groups.filter((g) => run.summaries[g.key]).length;
+    if (busy) {
+      const p = run.plan.groups.reduce((a, g) => a + (run.summaries[g.key] ? 1 : run.progress[g.key] || 0), 0) / total;
+      $('year-bar').value = p;
+      setText('year-status', `Calcul en cours : ${finished} ${finished > 1 ? 'journées types terminées' : 'journée type terminée'} sur ${total} (${fmt.format(Math.min(99, Math.floor(p * 100)))} %).`);
+      el.innerHTML = '';
+      return;
+    }
+    if (run.state === 'reference') { el.innerHTML = `<p class="empty">${run.plan.year} : sans ligne ni Cybercab, il n’y a pas de bilan à faire : c’est la situation de référence.</p>`; return; }
+    if (run.state === 'cancelled') { el.innerHTML = '<p class="empty">Bilan annulé.</p>'; return; }
+    if (run.state === 'failed') { el.innerHTML = '<p class="warn">Le calcul n’a pas pu se faire dans ce navigateur. Réessayez.</p>'; return; }
+    let a;
+    try { a = TQ.annualize(run.summaries, run.plan, TQ.ECON); } catch (e) { el.innerHTML = '<p class="warn">Le bilan est incomplet. Relancez le calcul.</p>'; return; }
+    const autumn = run.summaries['ouv-automne'], d = TQ.economics(autumn), x = d.annual;
+    const label = autumn.label;
+    if (!autumn.line && !autumn.cab && !autumn.scenario.auto) {
+      el.innerHTML = `<p class="empty">${run.plan.year} : ${esc(label)}. Sans ligne ni Cybercab, il n’y a pas de bilan à faire : c’est la situation de référence.</p>`;
+      return;
+    }
+    const signed = (v, strong) => `<td style="color:var(--${v < 0 ? 'bad' : 'ok'})${strong ? ';font-weight:600' : ''}">${moneyText(v)}</td>`;
+    const gap = (y, z) => `<td>${signedMoney(y - z)}${Math.abs(z) > 1 ? `<br><small>${pct1((y - z) / Math.abs(z))}</small>` : ''}</td>`;
+    const rows = [
+      ['Recettes', a.revenue, x.revenue], ['Exploitation', a.opex, x.opex], ['Investissement étalé', a.capital, x.capital],
+    ].map(([t, y, z]) => `<tr><th scope="row">${t}</th><td>${moneyText(y)}</td><td>${moneyText(z)}</td>${gap(y, z)}</tr>`).join('')
+      + `<tr class="total"><th scope="row">Résultat de l’exploitant</th>${signed(a.net, true)}${signed(x.net, true)}${gap(a.net, x.net)}</tr>`
+      + `<tr class="total"><th scope="row">Bilan pour la société</th>${signed(a.society.net, true)}${signed(x.society.net, true)}${gap(a.society.net, x.society.net)}</tr>`;
+    const types = a.byType.map((t) => `<tr><th scope="row">${esc(t.label)}</th><td>${esc(cap1(TQ.formatDate(t.date)))}${t.key === 'ouv-automne' && run.reused ? '<br><small>jour type déjà simulé, même journée</small>' : ''}</td><td>${fmt.format(t.weight)}</td><td>${fmt2.format(t.factor)}</td>${signed(t.net)}${signed(t.society)}</tr>`).join('')
+      + (Math.abs(a.energyAdjust) >= 1 ? `<tr><th scope="row">Électricité : tranches du tarif sur les kWh de l’année</th><td></td><td></td><td></td>${signed(-a.energyAdjust)}${signed(-a.energyAdjust)}</tr>` : '')
+      + `<tr class="total"><th scope="row">Année</th><td></td><td>${fmt.format(a.days)}</td><td></td>${signed(a.net)}${signed(a.society.net)}</tr>`;
+    const cab = a.parts.find((p) => p.items);
+    let sizing = '';
+    if (cab && a.sizing) {
+      const top = a.byType.filter((t) => t.summary.cab && t.summary.cab.chargers === a.sizing.chargers)[0];
+      sizing = `<p class="hint">Cybercab : ${cabItemsText(cab.items)}. Les bornes et la prime de puissance sont dimensionnées sur la plus forte pointe de recharge des 12 journées${top ? `, celle du ${esc(TQ.formatDate(top.date))}` : ''} ; le jour type d’automne seul en demande ${fmt.format(autumn.cab.chargers)}.</p>`;
+    }
+    el.innerHTML = `<p class="hint">${run.plan.year} : ${esc(label)}. Calculé en ${fmt.format(Math.max(1, Math.round(run.ms / 1000)))} s${run.reused ? ' (jour type d’automne repris)' : ''}, avec les coûts en vigueur.</p>
+      <div class="table-wrap"><table><thead><tr><th>Par an</th><th>Bilan sur un an (12 journées types)</th><th>Jour type d’automne × 300</th><th>Écart de méthode</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <p class="hint">Le « × 300 » compte l’année comme 300 jours ouvrables d’automne. Le bilan sur un an simule chaque type de jour et le pèse par son nombre de jours : les investissements, les coûts fixes, les dépôts et la prime de puissance n’y sont comptés qu’une fois par an. Le temps des automobilistes y est comparé, pour chaque type, à la situation actuelle du même jour.</p>
+      ${sizing}
+      <h3>Détail par journée type</h3>
+      <div class="table-wrap"><table><thead><tr><th>Journée type</th><th>Date simulée</th><th>Jours</th><th>Facteur de la journée</th><th>Résultat de l’exploitant</th><th>Bilan pour la société</th></tr></thead><tbody>${types}</tbody></table></div>
+      <p class="hint">Chaque ligne donne la part de l’année : la journée simulée multipliée par son nombre de jours. Le facteur de la journée compare sa demande à celle d’un jour ouvrable d’automne. Précision mesurée en 2027 contre les 365 jours simulés un par un : écart de −0,04 % pour l’exploitant et de +0,1 % pour la société avec le tramway, de −0,5 % et +1,4 % avec 3 000 Cybercab sur le réseau élargi. Pour les autres scénarios, l’écart n’est pas mesuré : environ 2 %, en ordre de grandeur.</p>`;
   }
 
   // ------------------------------------------------------------------ commandes
@@ -1459,7 +1552,7 @@
     fleet.addEventListener('change', () => { if (+fleet.value !== sim.scenario.fleet) restart(sim.t, { fleet: +fleet.value }); });
     syncControls(); lineHint(); writeHash();
     // coûts : la rentabilité se recalcule à partir des journées déjà simulées
-    const costsChanged = () => { syncControls(); writeHash(); if ($('dlg-compare').open) renderCompare(); };
+    const costsChanged = () => { syncControls(); writeHash(); if ($('dlg-compare').open) { renderCompare(); renderYear(); } };
     for (const id in COSTS) $('c-' + id).addEventListener('input', (e) => { econSet(COSTS[id][0], +e.target.value * COSTS[id][1]); costsChanged(); });
     $('costs-reset').addEventListener('click', () => { for (const id in COSTS) econSet(COSTS[id][0], dig(TQ.ECON_DEFAULTS, COSTS[id][0])); costsChanged(); });
     $('share').addEventListener('click', async () => {
@@ -1516,7 +1609,7 @@
       if (state.view3d !== was3d) setView3d(state.view3d);
       if (state.view3d) setPhoto(state.wantPhoto);
       syncControls(); lineHint(); writeHash(); // l'adresse montre le scénario réellement simulé
-      if ($('dlg-compare').open) renderCompare();
+      if ($('dlg-compare').open) { renderCompare(); renderYear(); }
     });
     $('winter').addEventListener('change', (e) => restart(sim.t, { winter: e.target.checked }));
     // « Démarrer à » : la journée choisie part de 5 h ; avec une date, les journées s'enchaînent ensuite
@@ -1548,7 +1641,10 @@
     $('assumptions').innerHTML = TQ.ASSUMPTIONS.map((s) => `<h3>${s.title}</h3><ul>${s.items.map((i) => `<li>${i}</li>`).join('')}</ul>`).join('');
     $('open-assumptions').addEventListener('click', () => $('dlg-assumptions').showModal());
     $('compare-fares').addEventListener('click', () => { showFareComparison = true; renderCompare(); });
-    $('open-compare').addEventListener('click', () => { failedDays.clear(); $('dlg-compare').showModal(); renderCompare(); });
+    $('open-compare').addEventListener('click', () => { failedDays.clear(); $('dlg-compare').showModal(); renderCompare(); renderYear(); });
+    // bilan sur un an : le calcul continue si la fenêtre se ferme ; « Annuler » arrête les workers
+    $('run-year').addEventListener('click', runYear);
+    $('year-cancel').addEventListener('click', () => { if (yearRun && yearRun.state === 'running') { yearStop(); yearRun.state = 'cancelled'; } renderYear(); $('run-year').focus(); });
     document.addEventListener('keydown', (e) => { if (e.code === 'Space' && e.target === document.body) { e.preventDefault(); $('play').click(); } });
     // mot d'accueil à la première visite
     let seen = false;

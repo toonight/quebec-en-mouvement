@@ -183,4 +183,70 @@
       neutral: false,
     };
   };
+
+  // ---------------------------------------------------------------- journées types d'une année (STORY-022)
+  // Bilan sur un an : chaque date de l'année est rangée dans une des 12 journées types ci-dessous, à partir de
+  // TQ.dayInfo seul. Chaque type est simulé une fois, à une date représentative, et pèse son nombre de jours.
+  // Ordre : celui du tableau du bilan. ouv-automne est le jour type actuel (facteur 1, la journée de l'enquête O-D).
+  const DAY_GROUPS = [
+    ['ouv-automne', 'Jour ouvrable d’automne (septembre à novembre)'],
+    ['ouv-hiver', 'Jour ouvrable d’hiver (janvier et février)'],
+    ['ouv-hiver-fort', 'Jour ouvrable d’hiver chargé (mars, 1er au 20 décembre)'],
+    ['ouv-printemps', 'Jour ouvrable de printemps (avril à juin)'],
+    ['ouv-ete', 'Jour ouvrable d’été (juillet et août, rentrée comprise)'],
+    ['construction', 'Jour ouvrable des vacances de la construction'],
+    ['ouv-fetes', 'Jour ouvrable des Fêtes (21 au 31 décembre, 2 au 5 janvier)'],
+    ['sam-hiver', 'Samedi d’hiver (décembre à mars)'],
+    ['sam', 'Samedi d’avril à novembre'],
+    ['dim-hiver', 'Dimanche d’hiver (décembre à mars)'],
+    ['dim', 'Dimanche d’avril à novembre'],
+    ['ferie', 'Jour férié ou chômé'],
+  ];
+  TQ.DAY_GROUPS = DAY_GROUPS.map(([key, label]) => ({ key, label }));
+
+  /** Journée type d'une date (clé de TQ.DAY_GROUPS). Le Vendredi saint, jour presque normal, suit les jours ouvrables. */
+  TQ.dayGroup = function (date) {
+    const i = TQ.dayInfo(date), m = +date.slice(5, 7);
+    if (i.type === 'ferie') return 'ferie';
+    if (i.type === 'samedi') return i.winter ? 'sam-hiver' : 'sam';
+    if (i.type === 'dimanche') return i.winter ? 'dim-hiver' : 'dim';
+    if (i.special === 'fetes' || i.special === 'retour-des-fetes') return 'ouv-fetes';
+    if (i.special === 'construction') return 'construction';
+    if (m >= 9 && m <= 11) return 'ouv-automne';
+    if (i.winter) return m === 3 || m === 12 ? 'ouv-hiver-fort' : 'ouv-hiver';
+    if (m >= 4 && m <= 6) return 'ouv-printemps';
+    return 'ouv-ete';
+  };
+
+  /** Plan du bilan sur un an : les journées types de l'année (2026 ou 2027), avec leur date représentative et leur
+   *  poids (nombre de jours ; somme = nombre de jours de l'année). Représentant : la date du type dont le facteur de
+   *  la journée est le plus proche de la moyenne du type ; à égalité, la plus proche du milieu du type.
+   *  Exception : l'ouvrable d'hiver chargé prend sa date au facteur le plus élevé (décembre, 0,95). Avec 3 000
+   *  Cybercab sur le réseau élargi, c'est la plus forte pointe de recharge de l'année ; avec 500 Cybercab dans le
+   *  corridor, non (26 bornes ce jour-là, 35 le 1er février, 30 le 10 mars) : les bornes suivent de toute façon le
+   *  maximum des 12 journées (TQ.annualize). Ce choix sous-représente un peu les jours de mars (environ −0,7 % sur le
+   *  bilan pour la société dans le corridor, estimé sur le seul 10 mars). */
+  TQ.yearPlan = function (year) {
+    const y = +year, first = `${y}-01-01`;
+    if (!Number.isInteger(y) || first < TQ.CALENDAR.first || `${y}-12-31` > TQ.CALENDAR.last) {
+      throw new Error(`Année refusée : ${year} est hors du calendrier connu (${TQ.CALENDAR.first.slice(0, 4)} à ${TQ.CALENDAR.last.slice(0, 4)}).`);
+    }
+    const byGroup = {};
+    for (let d = first; d.startsWith(String(y)); d = TQ.addDays(d, 1)) (byGroup[TQ.dayGroup(d)] = byGroup[TQ.dayGroup(d)] || []).push(d);
+    const total = (d) => TQ.dayInfo(d).total;
+    const groups = TQ.DAY_GROUPS.filter((g) => byGroup[g.key]).map((g) => {
+      const dates = byGroup[g.key], mid = (dates.length - 1) / 2;
+      const mean = dates.reduce((a, d) => a + total(d), 0) / dates.length;
+      let date;
+      if (g.key === 'ouv-hiver-fort') {
+        const top = Math.max(...dates.map(total)), c = dates.filter((d) => total(d) === top);
+        date = c[Math.floor((c.length - 1) / 2)];
+      } else {
+        let best = Infinity;
+        dates.forEach((d, i) => { const k = Math.abs(total(d) - mean) * 1e6 + Math.abs(i - mid); if (k < best) { best = k; date = d; } });
+      }
+      return { key: g.key, label: g.label, date, weight: dates.length, meanFactor: mean, factor: total(date), dates };
+    });
+    return { year: y, days: groups.reduce((a, g) => a + g.weight, 0), groups };
+  };
 })();
